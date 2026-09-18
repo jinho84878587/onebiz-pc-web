@@ -1,0 +1,12 @@
+{
+  "name": "onebiz-cloud-web",
+  "version": "1.0.0",
+  "private": true,
+  "description": "ONEBIZ PC/mobile web + Android snapshot sync server",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

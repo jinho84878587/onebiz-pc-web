@@ -1,0 +1,19 @@
+services:
+  - type: web
+    name: onebiz-cloud-web
+    runtime: node
+    plan: starter
+    buildCommand: ""
+    startCommand: node server.js
+    healthCheckPath: /health
+    envVars:
+      - key: ONEBIZ_DEVICE_KEY
+        sync: false
+      - key: ONEBIZ_TOKEN_SECRET
+        generateValue: true
+      - key: ONEBIZ_DATA_FILE
+        value: /var/data/onebiz-cloud.json
+    disk:
+      name: onebiz-data
+      mountPath: /var/data
+      sizeGB: 1
