@@ -1,12 +1,1 @@
-{
-  "name": "onebiz-cloud-web",
-  "version": "1.0.0",
-  "private": true,
-  "description": "ONEBIZ PC/mobile web + Android snapshot sync server",
-  "scripts": {
-    "start": "node server.js"
-  },
-  "engines": {
-    "node": ">=20"
-  }
-}
+{"name":"onebiz-auth-admin-v2","version":"2.0.0-dev.1","private":true,"engines":{"node":">=22.16.0 <23"},"scripts":{"start":"node server.js","demo":"node scripts/demo.js","test":"node --test tests/*.test.js","admin:create":"node scripts/admin.js","backup":"node scripts/backup.js"}}

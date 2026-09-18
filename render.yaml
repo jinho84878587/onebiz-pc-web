@@ -1,19 +1,27 @@
+# 유료 디스크 예시. 배포 실행 전 요금과 계정 설정을 직접 확인하세요.
+# 신규 독립 저장소 root가 cloud-v2일 때 기준입니다.
 services:
   - type: web
-    name: onebiz-cloud-web
+    name: onebiz-auth-admin-v2-staging
     runtime: node
     plan: starter
-    buildCommand: ""
+    buildCommand: npm ci --ignore-scripts
     startCommand: node server.js
     healthCheckPath: /health
     envVars:
-      - key: ONEBIZ_DEVICE_KEY
+      - key: NODE_VERSION
+        value: 22
+      - key: APP_MODE
+        value: production
+      - key: DATA_FILE
+        value: /var/data/onebiz.sqlite
+      - key: PUBLIC_ORIGIN
         sync: false
-      - key: ONEBIZ_TOKEN_SECRET
-        generateValue: true
-      - key: ONEBIZ_DATA_FILE
-        value: /var/data/onebiz-cloud.json
+      - key: DATA_KEY_HEX
+        sync: false
+      - key: POLICIES_APPROVED
+        sync: false
     disk:
-      name: onebiz-data
+      name: onebiz-v2-data
       mountPath: /var/data
       sizeGB: 1

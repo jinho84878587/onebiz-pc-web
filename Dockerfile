@@ -1,6 +1,6 @@
 FROM node:22-alpine
 WORKDIR /app
-COPY . .
-ENV PORT=10000
+COPY --chown=node:node . .
+USER node
 EXPOSE 10000
-CMD ["node", "server.js"]
+CMD ["node","server.js"]

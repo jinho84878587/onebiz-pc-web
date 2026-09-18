@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#3155e7" />
+  <title>ONEBIZ | 원비즈</title>
+  <link rel="stylesheet" href="/workspace.css" />
+</head>
+<body>
+  <div id="appShell" class="app-shell hidden">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-mark small">1B</div>
+        <div><strong>ONEBIZ</strong><span>원비즈</span></div>
+      </div>
+      <nav id="sideNav" class="side-nav"></nav>
+      <div class="sidebar-foot">
+        <span id="sidebarMemberId">-</span>
+        <button id="logoutBtn" class="text-button">로그아웃</button>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <div>
+          <h2 id="pageTitle">대시보드</h2>
+          <p id="pageSubtitle">오늘의 사업 현황을 한눈에 확인하세요.</p>
+        </div>
+        <div class="top-actions"><a href="/?page=account">통합계정</a>
+          <span id="syncBadge" class="sync-badge">동기화 대기</span>
+          <button id="refreshBtn" class="icon-button" title="새로고침">↻</button>
+          <button id="profileBtn" class="avatar-button" title="사업자 정보">OB</button>
+        </div>
+      </header>
+      <section id="content" class="content"></section>
+    </main>
+
+    <nav id="mobileNav" class="mobile-nav"></nav>
+  </div>
+
+  <dialog id="modal" class="modal">
+    <form method="dialog" class="modal-frame">
+      <header class="modal-header">
+        <div><h3 id="modalTitle">편집</h3><p id="modalSubtitle"></p></div>
+        <button class="close-button" value="cancel" aria-label="닫기">×</button>
+      </header>
+      <div id="modalBody" class="modal-body"></div>
+      <footer id="modalFooter" class="modal-footer"></footer>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status"></div>
+  <div id="printArea" class="print-area"></div>
+  <script src="/workspace.js" defer></script>
+</body>
+</html>
