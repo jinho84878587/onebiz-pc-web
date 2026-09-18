@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#3155e7" />
+  <title>ONEBIZ | 원비즈</title>
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <section id="loginView" class="login-shell">
+    <div class="login-card">
+      <div class="brand-mark">1B</div>
+      <div class="login-copy">
+        <h1>ONEBIZ <span>원비즈</span></h1>
+        <p>견적부터 계약·서명·대금관리까지 하나로</p>
+      </div>
+      <form id="loginForm" class="login-form">
+        <label>회원 ID
+          <input id="memberIdInput" autocomplete="username" placeholder="예: U-1A2B3C4D5E6F7G8H" required />
+        </label>
+        <label>PC 웹 연결 PIN
+          <input id="pinInput" inputmode="numeric" autocomplete="one-time-code" maxlength="6" pattern="[0-9]{6}" placeholder="6자리 숫자" required />
+        </label>
+        <button class="primary large" type="submit">로그인</button>
+        <button class="ghost large" type="button" id="demoBtn">디자인 미리보기</button>
+        <p id="loginError" class="form-error"></p>
+      </form>
+      <div class="login-help">
+        <strong>처음 연결하나요?</strong>
+        <span>ONEBIZ 앱 → 더보기 → PC 웹 연동에서 회원 ID와 6자리 PIN을 확인하세요.</span>
+      </div>
+    </div>
+    <div class="login-preview">
+      <div class="preview-card"><b>PC</b><span>견적·계약 작성과 출력</span></div>
+      <div class="preview-card"><b>모바일 웹</b><span>아이폰·안드로이드 브라우저</span></div>
+      <div class="preview-card"><b>앱 연동</b><span>같은 고객·견적·계약 데이터</span></div>
+    </div>
+  </section>
+
+  <div id="appShell" class="app-shell hidden">
+    <aside class="sidebar">
+      <div class="sidebar-brand">
+        <div class="brand-mark small">1B</div>
+        <div><strong>ONEBIZ</strong><span>원비즈</span></div>
+      </div>
+      <nav id="sideNav" class="side-nav"></nav>
+      <div class="sidebar-foot">
+        <span id="sidebarMemberId">-</span>
+        <button id="logoutBtn" class="text-button">로그아웃</button>
+      </div>
+    </aside>
+
+    <main class="main-area">
+      <header class="topbar">
+        <div>
+          <h2 id="pageTitle">대시보드</h2>
+          <p id="pageSubtitle">오늘의 사업 현황을 한눈에 확인하세요.</p>
+        </div>
+        <div class="top-actions">
+          <span id="syncBadge" class="sync-badge">동기화 대기</span>
+          <button id="refreshBtn" class="icon-button" title="새로고침">↻</button>
+          <button id="profileBtn" class="avatar-button" title="사업자 정보">OB</button>
+        </div>
+      </header>
+      <section id="content" class="content"></section>
+    </main>
+
+    <nav id="mobileNav" class="mobile-nav"></nav>
+  </div>
+
+  <dialog id="modal" class="modal">
+    <form method="dialog" class="modal-frame">
+      <header class="modal-header">
+        <div><h3 id="modalTitle">편집</h3><p id="modalSubtitle"></p></div>
+        <button class="close-button" value="cancel" aria-label="닫기">×</button>
+      </header>
+      <div id="modalBody" class="modal-body"></div>
+      <footer id="modalFooter" class="modal-footer"></footer>
+    </form>
+  </dialog>
+
+  <div id="toast" class="toast" role="status"></div>
+  <div id="printArea" class="print-area"></div>
+  <script src="/app.js" defer></script>
+</body>
+</html>
