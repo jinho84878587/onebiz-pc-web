@@ -50,7 +50,7 @@ function identity(p,subject,terms,linkUser=null,name=''){
 }
 function userInfo(id){const u=one('SELECT * FROM users WHERE id=?',id);return {id:u.id,profile:open(u.profile),profileRevision:u.profile_rev,profileComplete:!!u.complete,createdAt:u.created,identities:all('SELECT provider FROM identities WHERE user_id=?',id).map(i=>i.provider),subscription:u.subscription};}
 function mustAdmin(req,roles=['owner','operator','viewer']){const s=getSession(req,'admin');check(roles.includes(s.role),403,'관리자 권한이 부족합니다.');return s;}
-function profileValidate(b){const p={};for(const k of ['businessName','representative','registrationNo','address','addressDetail','phone','email','bankName','accountNumber','accountHolder'])p[k]=text(b[k],k.includes('address')?300:120);p.profileType=b.profileType==='BUSINESS'?'BUSINESS':'PERSONAL';check(p.representative,400,'이름을 입력해 주세요.');if(p.profileType==='BUSINESS')check(p.businessName&&/^\d{10}$/.test(p.registrationNo.replace(/\D/g,''))&&p.address,400,'상호·10자리 사업자번호·사업장 주소를 입력해 주세요.');return p;}
+function profileValidate(b){const p={};for(const k of ['businessName','representative','registrationNo','address','addressDetail','phone','email','bankName','accountNumber','accountHolder','industry'])p[k]=text(b[k],k.includes('address')?300:120);p.profileType=b.profileType==='BUSINESS'?'BUSINESS':'PERSONAL';check(p.representative,400,'이름을 입력해 주세요.');if(p.profileType==='BUSINESS')check(p.businessName&&/^\d{10}$/.test(p.registrationNo.replace(/\D/g,''))&&p.address,400,'상호·10자리 사업자번호·사업장 주소를 입력해 주세요.');return p;}
 function snapshotValidate(b){check(b.data&&typeof b.data==='object'&&!Array.isArray(b.data),400,'업무 데이터를 확인해 주세요.');for(const k of ['customers','quotes','contracts'])check(Array.isArray(b.data[k])&&b.data[k].length<=10000,400,'업무 목록 형식 또는 개수를 확인해 주세요.');check(Array.isArray(b.employees)&&b.employees.length<=10000,400,'직원 목록 형식을 확인해 주세요.');const out=JSON.parse(JSON.stringify({data:b.data,employees:b.employees}));for(const a of [...Object.values(out.data),out.employees]){if(Array.isArray(a))for(const item of a)check(item&&typeof item==='object'&&!Array.isArray(item),400,'각 항목은 객체여야 합니다.');}return out;}
 function countsFor(s){return {customers:s.data.customers.length,quotes:s.data.quotes.length,contracts:s.data.contracts.length,signed:s.data.contracts.filter(c=>c.signed===true).length,employees:s.employees.length};}
 function masked(v){const s=String(v||'');if(!s)return '';return s.length<3?s.slice(0,1)+'*':s.slice(0,1)+'*'.repeat(Math.min(s.length-2,5))+s.slice(-1);}
@@ -139,6 +139,23 @@ async function route(req,res){
  if(p==='/api/admin/notices'&&m==='POST'){const s=mustAdmin(req,['owner','operator']);writeGuard(req,s);const b=await body(req),starts=Number(b.starts),ends=Number(b.ends),target=b.target||'all';check(text(b.title)&&text(b.body,4000)&&Number.isFinite(starts)&&Number.isFinite(ends)&&ends>starts,400,'제목·내용·게시기간을 확인해 주세요.');check(target==='all'||one('SELECT id FROM users WHERE id=?',text(target,100)),400,'대상 사용자를 확인해 주세요.');const id=crypto.randomUUID();run('INSERT INTO notices VALUES(?,?,?,?,?,?,?,?,?)',id,text(b.title,120),text(b.body,4000),target,starts,ends,b.important===true?1:0,1,Date.now());log(s.actor,'notice.create',id,{target});return json(res,201,{ok:true,id});}
  if(/^\/api\/admin\/notices\/[^/]+$/.test(p)&&m==='DELETE'){const s=mustAdmin(req,['owner','operator']);writeGuard(req,s);const id=p.split('/').pop();run('UPDATE notices SET active=0 WHERE id=?',id);log(s.actor,'notice.disable',id);return json(res,200,{ok:true});}
  if(p==='/api/admin/audit'&&m==='GET'){mustAdmin(req,['owner']);return json(res,200,{items:all('SELECT * FROM audit ORDER BY id DESC LIMIT 200')});}
+ if(p==='/api/admin/devices'&&m==='GET'){
+  mustAdmin(req);const now=Date.now();
+  return json(res,200,{items:all('SELECT id,phrase,expires,user_id,used FROM devices WHERE used=0 AND expires>? ORDER BY expires ASC',now).map(d=>({id:d.id,phrase:d.phrase,expiresAt:d.expires,userId:d.user_id||null,approved:!!d.user_id}))});
+ }
+ if(/^\/api\/admin\/devices\/[^/]+\/approve$/.test(p)&&m==='POST'){
+  const s=mustAdmin(req,['owner','operator']);writeGuard(req,s);const id=p.split('/')[4],d=one('SELECT * FROM devices WHERE id=?',id);
+  check(d&&!d.used&&d.expires>Date.now(),404,'기기 연결 요청이 만료되었거나 없습니다.');
+  if(d.user_id)return json(res,200,{ok:true,userId:d.user_id,alreadyApproved:true});
+  const b=await body(req);let userId=text(b.userId,100);
+  if(userId){const u=one('SELECT id,status FROM users WHERE id=?',userId);check(u&&u.status==='active',400,'연결할 사용자를 확인해 주세요.');}
+  else{
+   userId=crypto.randomUUID();const now=Date.now(),profile={profileType:'BUSINESS',representative:'',phone:'',businessName:'',industry:''};
+   const consent={terms:false,privacy:false,marketing:false,version:policyVersion,at:now,source:'admin_device_pair'};
+   run('INSERT INTO users(id,profile,consent,created,last_login) VALUES(?,?,?,?,?)',userId,seal(profile),JSON.stringify(consent),now,now);
+  }
+  run('UPDATE devices SET user_id=? WHERE id=?',userId,d.id);log(s.actor,'device.approve',d.id,{userId});return json(res,200,{ok:true,userId});
+ }
  if(p==='/api/admin/settings'&&m==='GET'){mustAdmin(req);return json(res,200,{mode,phone:local?'demo':env.NCP_SERVICE_ID?'configured':'not_configured',oauth:Object.fromEntries(['kakao','naver','google'].map(k=>[k,provider.configured(env,k)])),dataStorage:'encrypted SQLite / single instance',nativeSync:'manual / revision checked',push:'not_connected',billing:'not_connected',legal:env.POLICIES_APPROVED==='true'?'approved_by_operator':'draft'});}
  // Old shared-key and fixed PIN APIs are deliberately unavailable.
  if(p.startsWith('/api/')||p.startsWith('/auth/'))throw new HttpError(404,'지원하지 않는 경로입니다.');
