@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ONEBIZ | Android 연결 승인</title><link rel="stylesheet" href="/styles.css">
+<style>body{background:#f6f7fb}.pair-wrap{max-width:820px;margin:40px auto;padding:20px}.pair-card{background:#fff;border:1px solid #e5e7eb;border-radius:20px;padding:24px;margin-bottom:16px}.pair-row{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:16px 0;border-top:1px solid #eee}.pair-row:first-child{border-top:0}.code{font-size:28px;letter-spacing:6px;font-weight:800}.muted2{color:#6b7280;font-size:13px}.top-actions{display:flex;justify-content:space-between;align-items:center;gap:12px}.pair-btn{background:#2856e7;color:#fff;border:0;border-radius:12px;padding:11px 16px;font-weight:700;cursor:pointer}.pair-btn:disabled{opacity:.5}.link{color:#2856e7;text-decoration:none;font-weight:700}</style></head>
+<body><main class="pair-wrap"><div class="pair-card"><div class="top-actions"><div><h2>Android 관리자센터 연결 승인</h2><p class="muted2">원비즈 앱에 표시된 6자리 연결코드와 같은 요청만 승인하세요.</p></div><a class="link" href="/admin">← 관리센터</a></div></div>
+<div class="pair-card"><div id="status" class="muted2">불러오는 중…</div><div id="list"></div></div></main>
+<script>
+let csrf='';
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+async function call(p,m='GET',b){
+ const r=await fetch('/api/admin/'+p,{method:m,credentials:'same-origin',headers:{'Content-Type':'application/json','X-Onebiz-Client':'web','X-CSRF-Token':csrf},...(b?{body:JSON.stringify(b)}:{})});
+ const d=await r.json(); if(!r.ok)throw new Error(d.error||('HTTP '+r.status)); return d;
+}
+async function load(){
+ try{
+  const me=await call('me'); csrf=me.csrf;
+  const d=await call('devices');
+  const list=document.getElementById('list'),status=document.getElementById('status');
+  status.textContent=d.items.length?'앱의 연결코드와 일치하는 항목을 확인하세요.':'승인 대기 중인 Android 기기가 없습니다.';
+  list.innerHTML=d.items.map(x=>'<div class="pair-row"><div><div class="code">'+esc(x.phrase)+'</div><div class="muted2">만료: '+new Date(x.expiresAt).toLocaleString('ko-KR')+(x.approved?' · 승인됨':'')+'</div></div>'+(x.approved?'<strong>승인완료</strong>':'<button class="pair-btn" data-id="'+esc(x.id)+'">이 기기 승인</button>')+'</div>').join('');
+  document.querySelectorAll('[data-id]').forEach(btn=>btn.onclick=async()=>{if(!confirm('앱 화면의 6자리 연결코드와 정확히 일치합니까?'))return;btn.disabled=true;try{await call('devices/'+btn.dataset.id+'/approve','POST',{});await load();}catch(e){alert(e.message);btn.disabled=false;}});
+ }catch(e){document.getElementById('status').innerHTML='관리자 로그인이 필요하거나 요청을 불러오지 못했습니다. <a href="/admin">관리센터 로그인</a><br>'+esc(e.message);}
+}
+load(); setInterval(load,10000);
+</script></body></html>
