@@ -55,14 +55,14 @@ function snapshotValidate(b){check(b.data&&typeof b.data==='object'&&!Array.isAr
 function countsFor(s){return {customers:s.data.customers.length,quotes:s.data.quotes.length,contracts:s.data.contracts.length,signed:s.data.contracts.filter(c=>c.signed===true).length,employees:s.employees.length};}
 function masked(v){const s=String(v||'');if(!s)return '';return s.length<3?s.slice(0,1)+'*':s.slice(0,1)+'*'.repeat(Math.min(s.length-2,5))+s.slice(-1);}
 function phoneMask(v){const d=String(v||'').replace(/\D/g,'');return d.length>=8?d.slice(0,3)+'-****-'+d.slice(-4):'-';}
-function publicStats(u){const p=open(u.profile),snap=one('SELECT counts,updated FROM snapshots WHERE user_id=?',u.id);return {id:u.id,name:masked(p.representative),businessName:masked(p.businessName),phone:phoneMask(p.phone),type:p.profileType,profileComplete:!!u.complete,createdAt:u.created,lastLogin:u.last_login,status:u.status,subscription:u.subscription,counts:snap?JSON.parse(snap.counts):{customers:0,quotes:0,contracts:0,signed:0,employees:0},lastSync:snap?.updated||null};}
+function publicStats(u){const p=open(u.profile),snap=one('SELECT counts,updated FROM snapshots WHERE user_id=?',u.id),identities=all('SELECT provider FROM identities WHERE user_id=?',u.id).map(i=>i.provider);return {id:u.id,name:masked(p.representative),businessName:masked(p.businessName),phone:phoneMask(p.phone),type:p.profileType,profileComplete:!!u.complete,createdAt:u.created,lastLogin:u.last_login,status:u.status,subscription:u.subscription,identities,counts:snap?JSON.parse(snap.counts):{customers:0,quotes:0,contracts:0,signed:0,employees:0},lastSync:snap?.updated||null};}
 async function route(req,res){
  const u=new URL(req.url,origin),p=u.pathname,m=req.method;
  res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Frame-Options','DENY');
  res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
  if(!local)res.setHeader('Strict-Transport-Security','max-age=31536000');
  if(p==='/health')return json(res,200,{ok:true,version:'2.0.0-dev.1',mode});
- if(p==='/api/config'&&m==='GET')return json(res,200,{mode,providers:Object.fromEntries(['kakao','naver','google'].map(k=>[k,provider.configured(env,k)])),phoneEnabled:local||!!(env.NCP_SERVICE_ID&&env.NCP_ACCESS_KEY&&env.NCP_SECRET_KEY&&env.NCP_SENDER),policyVersion,nativeSync:'manual-revision-checked',push:false,payments:false});
+ if(p==='/api/config'&&m==='GET')return json(res,200,{mode,providers:Object.fromEntries(['kakao','naver','google'].map(k=>[k,provider.configured(env,k)])),phoneEnabled:local||!!(env.NCP_SERVICE_ID&&env.NCP_ACCESS_KEY&&env.NCP_SECRET_KEY&&env.NCP_SENDER),policyVersion,nativeSync:'automatic-account-sync',push:false,payments:false});
  if(p==='/api/auth/phone/request'&&m==='POST'){
   writeGuard(req);limit(req,'sms-ip:'+ip(req),20,3600000);const b=await body(req),number=phone(b.phone),c=consent(b);
   let link=null;if(b.link===true){const s=getSession(req);writeGuard(req,s);check(Date.now()-s.created<600000,403,'로그인 후 10분 이내에 계정을 연결해 주세요.');link=s.actor;}
@@ -156,7 +156,7 @@ async function route(req,res){
   }
   run('UPDATE devices SET user_id=? WHERE id=?',userId,d.id);log(s.actor,'device.approve',d.id,{userId});return json(res,200,{ok:true,userId});
  }
- if(p==='/api/admin/settings'&&m==='GET'){mustAdmin(req);return json(res,200,{mode,phone:local?'demo':env.NCP_SERVICE_ID?'configured':'not_configured',oauth:Object.fromEntries(['kakao','naver','google'].map(k=>[k,provider.configured(env,k)])),dataStorage:'encrypted SQLite / single instance',nativeSync:'manual / revision checked',push:'not_connected',billing:'not_connected',legal:env.POLICIES_APPROVED==='true'?'approved_by_operator':'draft'});}
+ if(p==='/api/admin/settings'&&m==='GET'){mustAdmin(req);return json(res,200,{mode,phone:local?'demo':env.NCP_SERVICE_ID?'configured':'not_configured',oauth:Object.fromEntries(['kakao','naver','google'].map(k=>[k,provider.configured(env,k)])),dataStorage:'encrypted SQLite / single instance',nativeSync:'automatic / account based',push:'not_connected',billing:'not_connected',legal:env.POLICIES_APPROVED==='true'?'approved_by_operator':'draft'});}
  // Old shared-key and fixed PIN APIs are deliberately unavailable.
  if(p.startsWith('/api/')||p.startsWith('/auth/'))throw new HttpError(404,'지원하지 않는 경로입니다.');
  if(m!=='GET'&&m!=='HEAD')throw new HttpError(405,'지원하지 않는 요청입니다.');
