@@ -25,17 +25,18 @@ function writeGuard(req,session){
  else check(req.headers['x-onebiz-client']==='android',403,'요청 출처를 확인해 주세요.');
  if(session&&!session.bearer)check(equal(req.headers['x-csrf-token']||'',session.csrf),403,'화면을 새로고침한 후 다시 시도해 주세요.');
 }
+const androidSessionTtl=30*86400000;
 function getSession(req,kind='user',optional=false){
  const bearer=(req.headers.authorization||'').startsWith('Bearer '),token=bearer?req.headers.authorization.slice(7):cookie(req,kind==='admin'?'ob_admin':'ob_user');
- const s=token?one('SELECT * FROM sessions WHERE hash=? AND kind=? AND expires>?',hash(token),kind,Date.now()):null;
+ const tokenHash=token?hash(token):'',s=token?one('SELECT * FROM sessions WHERE hash=? AND kind=? AND expires>?',tokenHash,kind,Date.now()):null;
  if(!s){if(optional)return null;throw new HttpError(401,'로그인이 필요합니다.');}
- if(kind==='user'){const u=one('SELECT status FROM users WHERE id=?',s.actor);check(u&&u.status==='active',403,'이 계정은 이용이 제한되어 있습니다.');}
+ if(kind==='user'){const u=one('SELECT status FROM users WHERE id=?',s.actor);check(u&&u.status==='active',403,'이 계정은 이용이 제한되어 있습니다.');if(bearer)run('UPDATE sessions SET expires=? WHERE hash=?',Date.now()+androidSessionTtl,tokenHash);}
  return {...s,bearer};
 }
 function sessionCreate(req,res,id,kind='user',role='owner',asBearer=false){
- const token=random(),csrf=random(),now=Date.now();run('INSERT INTO sessions VALUES(?,?,?,?,?,?,?)',hash(token),id,kind,role,csrf,now+(kind==='admin'?3600000:43200000),now);
+ const token=random(),csrf=random(),now=Date.now(),ttl=kind==='admin'?3600000:(asBearer?androidSessionTtl:43200000);run('INSERT INTO sessions VALUES(?,?,?,?,?,?,?)',hash(token),id,kind,role,csrf,now+ttl,now);
  if(!asBearer)setCookie(res,kind==='admin'?'ob_admin':'ob_user',token,kind==='admin'?3600:43200);
- return asBearer?{token,expiresAt:now+43200000}:{csrf};
+ return asBearer?{token,expiresAt:now+ttl}:{csrf};
 }
 function consent(b){check(b.terms===true&&b.privacy===true,400,'필수 약관과 개인정보 안내를 확인해 주세요.');return {terms:true,privacy:true,marketing:b.marketing===true,version:policyVersion,at:Date.now()};}
 function identity(p,subject,terms,linkUser=null,name=''){
