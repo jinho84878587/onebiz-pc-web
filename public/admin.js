@@ -1,7 +1,10 @@
 'use strict';
 const $=(s,r=document)=>r.querySelector(s),$$=(s,r=document)=>[...r.querySelectorAll(s)];
 const root=$('#root'),esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const when=v=>v?new Date(v).toLocaleString('ko-KR'):'-';let csrf='',session=null,route='dashboard',cfg,userPage=0;
+const when=v=>v?new Date(v).toLocaleString('ko-KR'):'-';
+const money=v=>new Intl.NumberFormat('ko-KR').format(Math.round(Number(v)||0))+'원';
+const inputDate=v=>{const d=new Date(v),pad=n=>String(n).padStart(2,'0');return d.getFullYear()+'-'+pad(d.getMonth()+1)+'-'+pad(d.getDate())+'T'+pad(d.getHours())+':'+pad(d.getMinutes());};
+let csrf='',session=null,route='dashboard',cfg,userPage=0;
 const brand='<a class="brand" href="/admin"><span class="mark">1B</span><span>ONEBIZ<small>원비즈 통합관리센터</small></span></a>';
 function toast(s){$('#toast').textContent=s;$('#toast').className='show';setTimeout(()=>$('#toast').className='',4000);}
 async function api(p,m='GET',b){const r=await fetch('/api/admin/'+p,{method:m,credentials:'same-origin',headers:{'Content-Type':'application/json','X-Onebiz-Client':'web','X-CSRF-Token':csrf},...(b?{body:JSON.stringify(b)}:{})});const d=await r.json();if(!r.ok){const e=new Error(d.error);e.status=r.status;throw e;}return d;}
