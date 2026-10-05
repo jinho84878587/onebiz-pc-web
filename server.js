@@ -89,7 +89,15 @@ async function route(req,res){
   const ses=sessionCreate(req,res,id);return json(res,200,{ok:true,...ses,user:userInfo(id)});
  }
  if(/^\/api\/auth\/social\/(kakao|naver|google)$/.test(p)&&m==='POST'){
-  writeGuard(req);limit(req,'social:'+ip(req),30,600000);const b=await body(req),name=p.split('/').pop();check(provider.configured(env,name),503,'소셜 로그인 앱 키·콜백 주소 설정 전입니다.');const terms=consent(b);
+  writeGuard(req);limit(req,'social:'+ip(req),30,600000);const b=await body(req),name=p.split('/').pop();check(provider.configured(env,name),503,'소셜 로그인 앱 키·콜백 주소 설정 전입니다.');
+  let terms;
+  const deviceRequest=text(b.deviceRequest,100);
+  if(deviceRequest){
+   const d=one('SELECT provider,consent,expires,used FROM devices WHERE id=?',deviceRequest);
+   check(d&&!d.used&&d.expires>Date.now()&&d.provider===name,400,'기기 로그인 요청이 만료되었거나 일치하지 않습니다.');
+   try{terms=JSON.parse(d.consent||'{}');}catch{terms={};}
+   check(terms.terms===true&&terms.privacy===true,400,'필수 약관과 개인정보 안내를 확인해 주세요.');
+  }else terms=consent(b);
   let link=null;if(b.link===true){const s=getSession(req);writeGuard(req,s);check(Date.now()-s.created<600000,403,'다시 로그인한 후 연결해 주세요.');link=s.actor;}
   const state=random(),binding=random(),verifier=random(),nonce=random();
   run('INSERT INTO oauth VALUES(?,?,?,?,?,?,?,?)',hash(state),name,hash(binding),seal(verifier),nonce,Date.now()+600000,JSON.stringify(terms),link);
@@ -117,7 +125,13 @@ async function route(req,res){
   log(s.actor,'snapshot.save',s.actor,{revision});return json(res,200,{ok:true,revision});
  }
  if(p==='/api/device/start'&&m==='POST'){
-  writeGuard(req);limit(req,'device-start:'+ip(req),10,600000);const b=await body(req);check(/^[a-zA-Z0-9_-]{43}$/.test(b.challenge||''),400,'기기 인증 요청을 확인해 주세요.');const id=random(),phrase=crypto.randomInt(100000,1000000).toString();run('INSERT INTO devices(id,challenge,phrase,expires) VALUES(?,?,?,?)',id,b.challenge,phrase,Date.now()+600000);return json(res,200,{requestId:id,verificationUrl:origin+'/connect?request='+id,phrase,interval:3,expiresIn:600});
+  writeGuard(req);limit(req,'device-start:'+ip(req),10,600000);const b=await body(req);check(/^[a-zA-Z0-9_-]{43}$/.test(b.challenge||''),400,'기기 인증 요청을 확인해 주세요.');
+  const providerName=['kakao','naver','google'].includes(String(b.provider||''))?String(b.provider):'';
+  let deviceConsent={};if(providerName){check(provider.configured(env,providerName),503,'소셜 로그인 앱 키·콜백 주소 설정 전입니다.');deviceConsent=consent(b);}
+  const id=random(),phrase=crypto.randomInt(100000,1000000).toString();
+  run('INSERT INTO devices(id,challenge,phrase,expires,provider,consent) VALUES(?,?,?,?,?,?)',id,b.challenge,phrase,Date.now()+600000,providerName,JSON.stringify(deviceConsent));
+  const verificationUrl=origin+'/connect?request='+encodeURIComponent(id)+(providerName?'&provider='+encodeURIComponent(providerName):'');
+  return json(res,200,{requestId:id,verificationUrl,phrase,interval:3,expiresIn:600,provider:providerName||null});
  }
  if(p==='/api/device/info'&&m==='GET'){getSession(req);const d=one('SELECT phrase,expires FROM devices WHERE id=? AND used=0',u.searchParams.get('request')||'');check(d&&d.expires>Date.now(),404,'기기 연결 요청이 만료되었습니다.');return json(res,200,{phrase:d.phrase});}
  if(p==='/api/device/approve'&&m==='POST'){const s=getSession(req);writeGuard(req,s);check(Date.now()-s.created<600000,403,'다시 로그인한 후 기기를 연결해 주세요.');check(userInfo(s.actor).profileComplete,400,'기본정보 등록 후 연결해 주세요.');const b=await body(req);const d=one('SELECT * FROM devices WHERE id=?',text(b.requestId,100));check(d&&!d.used&&!d.user_id&&d.expires>Date.now()&&b.confirm===true,400,'연결 요청을 확인해 주세요.');run('UPDATE devices SET user_id=? WHERE id=?',s.actor,d.id);log(s.actor,'device.approve',d.id);return json(res,200,{ok:true});}
