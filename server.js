@@ -78,6 +78,13 @@ function alimtalkPreview(input){
  if(kind==='contractSign'){const url='https://'+vars['#{서명링크}'].replace(/^https?:\/\//,'');check(/^https:\/\/[-a-z0-9.]+\/[a-zA-Z0-9_/?=&%-]+$/i.test(url)&&new URL(url).hostname==='hiwon-websign-server.onrender.com',400,'서명 링크가 올바르지 않습니다.');opts.variables['#{서명링크}']=url.slice(8);}
  return {kind,to,templateId,options:opts};
 }
+// The authoritative Kakao channel ID comes from the approved template itself.
+// Do not trust a stale manually entered SOLAPI_PFID when submitting a message.
+function solapiApprovedChannelId(template){
+ const channelId=text(template?.channelId,100);
+ check(channelId&&/^[A-Za-z0-9_-]{6,100}$/.test(channelId),503,'승인 템플릿의 카카오 채널 ID가 확인되지 않습니다. 채널 그룹 또는 연결 상태를 확인해 주세요.');
+ return channelId;
+}
 async function sendAlimtalk(msg){
  const templateId=msg?.options?.templateId||'';
  const permitted=[...Object.values(alimtalkKinds).map(t=>t.envKey),
@@ -90,6 +97,7 @@ async function sendAlimtalk(msg){
  const approved=await templateInspector.sendable(alimtalkAuth);
  const template=approved.find(t=>t.templateId===msg?.options?.templateId);
  check(template,403,'SOLAPI에서 발송 가능한 승인 템플릿이 아닙니다.');
+ const canonicalChannelId=solapiApprovedChannelId(template);
  const actualNames=templateInspector.inspect([{kind:'send',name:'send',envKey:'SOLAPI_RUNTIME_TEMPLATE',fields:null,reviewStatus:'검수완료'}],[template],{SOLAPI_RUNTIME_TEMPLATE:msg.options.templateId})[0].variables;
  const requestedNames=Object.keys(msg.options.variables||{}).map(k=>k.replace(/^#\{/,'').replace(/\}$/,'')).sort((a,b)=>a.localeCompare(b,'ko'));
  check(actualNames.length===requestedNames.length&&actualNames.every((x,i)=>x===requestedNames[i]),403,'승인 템플릿 변수명과 원비즈 전송 변수가 일치하지 않습니다.');
@@ -97,7 +105,7 @@ async function sendAlimtalk(msg){
  try{
  const r=await fetch('https://api.solapi.com/messages/v4/send-many/detail',{
   method:'POST',headers:{'Content-Type':'application/json',Authorization:alimtalkAuth()},
-  body:JSON.stringify({messages:[{to:msg.to,kakaoOptions:msg.options}],strict:true,showMessageList:true,allowDuplicates:false}),signal:ctrl.signal
+  body:JSON.stringify({messages:[{to:msg.to,kakaoOptions:{...msg.options,pfId:canonicalChannelId}}],strict:true,showMessageList:true,allowDuplicates:false}),signal:ctrl.signal
  });
  const result=await r.json(),counts=result?.groupInfo?.count;
  const accepted=r.ok&&Number(counts?.registeredSuccess)===1&&Number(counts?.registeredFailed||0)===0&&
@@ -481,6 +489,14 @@ if(!local&&env.SOLAPI_API_KEY&&env.SOLAPI_API_SECRET){
    const items=templateInspector.inspect(registry,sendable,env);
    const stats={registered:items.filter(x=>x.registered).length,sendable:items.filter(x=>x.providerSendable).length,matches:items.filter(x=>x.variableMatch==='match').length,mismatches:items.filter(x=>x.variableMatch==='mismatch').length};
    console.info('solapi_readonly_check_summary',JSON.stringify(stats));
+   const linkedIds=Object.values(alimtalkKinds).map(t=>env[t.envKey]).filter(Boolean);
+   const linkedTemplates=sendable.filter(t=>linkedIds.includes(t.templateId));
+   console.info('solapi_channel_binding_check',JSON.stringify({
+     linkedTemplates:linkedTemplates.length,
+     withChannelId:linkedTemplates.filter(t=>!!t.channelId).length,
+     uniqueChannels:new Set(linkedTemplates.map(t=>t.channelId).filter(Boolean)).size,
+     configuredPfIdMatches:linkedTemplates.filter(t=>t.channelId===env.SOLAPI_PFID).length
+   }));
    for(const t of items)console.info('solapi_readonly_template',JSON.stringify({kind:t.kind,sendable:t.providerSendable,match:t.variableMatch,variables:t.variables}));
   }catch(e){console.warn('solapi_readonly_check_failed',String(e.message||'external_api').slice(0,180));const checks=await templateInspector.diagnose(alimtalkAuth);console.info('solapi_readonly_permissions',JSON.stringify(checks));}
  },1000).unref();
