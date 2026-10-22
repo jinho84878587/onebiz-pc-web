@@ -385,4 +385,20 @@ const server=http.createServer((req,res)=>route(req,res).catch(e=>{if(!res.heade
 server.requestTimeout=20000;server.headersTimeout=10000;
 const cleanup=setInterval(()=>{const now=Date.now();for(const table of ['sessions','otp','rates','oauth','devices','quote_links','contract_links','statement_links','receipt_links'])run(`DELETE FROM ${table} WHERE expires<?`,now-3600000);},600000);cleanup.unref();
 server.listen(port,host,()=>console.log(`ONEBIZ V2 ${mode} listening ${host}:${port}`));
+// Read-only deployment sanity check. No recipients, API secrets, or message contents in logs.
+if(!local&&env.SOLAPI_API_KEY&&env.SOLAPI_API_SECRET){
+ setTimeout(async()=>{
+  try{
+   const sendable=await templateInspector.sendable(alimtalkAuth);
+   const registry=[
+    ...Object.entries(alimtalkKinds).map(([kind,t])=>({kind,name:kind,envKey:t.envKey,fields:t.fields,reviewStatus:'검수완료'})),
+    ...alimtalkAdditionalRegistry.map(t=>({...t,kind:t.envKey,fields:null}))
+   ];
+   const items=templateInspector.inspect(registry,sendable,env);
+   const stats={registered:items.filter(x=>x.registered).length,sendable:items.filter(x=>x.providerSendable).length,matches:items.filter(x=>x.variableMatch==='match').length,mismatches:items.filter(x=>x.variableMatch==='mismatch').length};
+   console.info('solapi_readonly_check_summary',JSON.stringify(stats));
+   for(const t of items)console.info('solapi_readonly_template',JSON.stringify({kind:t.kind,sendable:t.providerSendable,match:t.variableMatch,variables:t.variables}));
+  }catch(e){console.warn('solapi_readonly_check_failed',e.status||'external_api');}
+ },1000).unref();
+}
 process.on('SIGTERM',()=>server.close(()=>{store.db.close();process.exit(0);}));
