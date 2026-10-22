@@ -78,6 +78,60 @@ async function sendAlimtalk(msg){
  try{const r=await fetch('https://api.solapi.com/messages/v4/send-many/detail',{method:'POST',headers:{'Content-Type':'application/json',Authorization:alimtalkAuth()},body:JSON.stringify({messages:[{to:msg.to,kakaoOptions:msg.options}]}),signal:ctrl.signal});const result=await r.json();return {ok:r.ok,status:r.status,result};}
  finally{clearTimeout(timer);}
 }
+
+function userAlimtalkRequest(actor,input){
+ const kind=text(input.kind,40),contractId=text(input.contractId,100);
+ check(['contractSign','receivable'].includes(kind),400,'회원이 직접 발송할 수 있는 안내를 선택해 주세요.');
+ check(contractId,400,'계약서 번호가 필요합니다.');
+ const row=one('SELECT body FROM snapshots WHERE user_id=?',actor);
+ check(row,404,'계약서 데이터를 동기화한 후 발송해 주세요.');
+ const contract=(open(row.body).data?.contracts||[]).find(c=>String(c.id)===contractId);
+ check(contract,404,'내 계약서에서 발송 대상을 찾을 수 없습니다.');
+ const profileRow=one('SELECT profile FROM users WHERE id=?',actor),profile=open(profileRow.profile);
+ const supplier=text(profile.businessName||profile.representative,120);
+ check(supplier,400,'내 업체 정보를 등록해 주세요.');
+ const recipient=phone(contract.phone),customer=text(contract.customer,80);
+ check(customer,400,'계약 상대방 이름이 필요합니다.');
+ const variables={'고객명':customer,'업체명':supplier};
+ if(kind==='contractSign'){
+  check(contract.signed!==true,400,'이미 체결된 계약서입니다.');
+  const signUrl=text(contract.signUrl,500);
+  check(signUrl,400,'이 계약서의 전자서명 링크를 먼저 생성·동기화해 주세요.');
+  variables['계약금액']=Math.round(Number(contract.amount)||0).toLocaleString('ko-KR');
+  variables['서명링크']=signUrl;
+ }else{
+  check(contract.signed===true,400,'계약 체결 확인 후 미수금을 안내할 수 있습니다.');
+  const amount=Math.max(0,Math.round((Number(contract.amount)||0)-(Number(contract.paidAmount)||0)));
+  check(amount>0,400,'현재 미수금이 없습니다.');
+  const due=text(contract.balanceDueDate,20);
+  check(due,400,'계약서의 잔금 지급예정일을 먼저 입력해 주세요.');
+  variables['미수금액']=amount.toLocaleString('ko-KR');
+  variables['지급예정일']=due;
+ }
+ const data=alimtalkPreview({kind,to:recipient,variables});
+ return {...data,actor,contractId,customer,supplier,phoneMask:phoneMask(recipient)};
+}
+function dispatchAlimtalkPlan(dispatchRow,record,status,changed){
+ const kind=status==='확인중'?'dispatchRequest':status==='배차완료'?'dispatchDone':status==='취소'?'dispatchCancel':changed?'dispatchChange':null;
+ if(!kind)return null;
+ const user=one('SELECT profile,status FROM users WHERE id=?',dispatchRow.user_id);
+ if(!user||user.status!=='active')return {kind,error:'신청 회원 계정 확인 필요'};
+ const p=open(user.profile),applicant=text(p.representative||p.businessName,80),company=text(p.businessName||p.representative,120);
+ const recipient=String(p.phone||'').replace(/\D/g,'');
+ if(!/^010\d{8}$/.test(recipient))return {kind,error:'신청 회원의 휴대폰 미등록'};
+ const variables={'고객명':applicant,'업체명':company,'장비종류':record.equipment,'사용일':record.date,'예정시간':record.arrivalTime||'미정','사용시간':String(record.minutes)+'분','현장주소':record.address,'변경사용일':record.date,'변경시간':record.arrivalTime||'미정'};
+ try{const data=alimtalkPreview({kind,to:recipient,variables});return {...data,actor:dispatchRow.user_id,dispatchId:dispatchRow.id,phoneMask:phoneMask(recipient)};}
+ catch(e){return {kind,error:e.status?e.message:'알림톡 구성 오류'};}
+}
+function alimtalkResultLog(actor,kind,targetRef,data,result,status){
+ const id=crypto.randomUUID();
+ const safe={httpStatus:result?.status||0,providerError:result?.ok?'':text(result?.result?.error||result?.result?.message||'',160)};
+ run('INSERT INTO alimtalk_logs(id,actor,kind,target_ref,phone_mask,template_id,status,response,created) VALUES(?,?,?,?,?,?,?,?,?)',id,actor,kind,targetRef,data.phoneMask||phoneMask(data.to),data.templateId,status,JSON.stringify(safe),Date.now());
+ return id;
+}
+function alimtalkSendingAllowed(mode){
+ return env.SOLAPI_SEND_ENABLED==='true'&&env.SOLAPI_TEMPLATE_VARIABLES_VERIFIED==='true'&&(mode==='user'?env.SOLAPI_MEMBER_SEND_ENABLED==='true':env.SOLAPI_DISPATCH_AUTO_ENABLED==='true');
+}
 function dispatchValidate(b,previous={}){const pick=(k,d='')=>b[k]!==undefined?b[k]:(previous[k]!==undefined?previous[k]:d);const customerName=text(pick('customerName'),80),equipment=text(pick('equipment'),30),address=text(pick('address'),300),date=text(pick('date'),20),arrivalTime=text(pick('arrivalTime'),10),floor=text(pick('floor'),30),goods=text(pick('goods'),200),note=text(pick('note'),500),minutes=Number(pick('minutes',30)),phoneValue=phone(pick('phone')),estimatedAmount=Math.max(0,Math.round(Number(pick('estimatedAmount',0))||0)),requiresControlRoom=pick('requiresControlRoom',false)===true,controlRoomConfirmed=pick('controlRoomConfirmed',false)===true;check(['사다리차','스카이차','크레인'].includes(equipment),400,'장비를 선택해 주세요.');check(address&&/^\d{4}-\d{2}-\d{2}$/.test(date),400,'주소와 날짜를 확인해 주세요.');if(arrivalTime)check(/^([01]\d|2[0-3]):[0-5]\d$/.test(arrivalTime),400,'도착시간을 확인해 주세요.');check(Number.isInteger(minutes)&&minutes>=30&&minutes<=1440&&minutes%30===0,400,'사용시간은 30분 단위로 입력해 주세요.');check(estimatedAmount<=100000000,400,'예상요금을 확인해 주세요.');return {customerName,equipment,address,date,arrivalTime,floor,goods,note,minutes,phone:phoneValue,estimatedAmount,requiresControlRoom,controlRoomConfirmed};}
 function snapshotValidate(b){check(b.data&&typeof b.data==='object'&&!Array.isArray(b.data),400,'업무 데이터를 확인해 주세요.');for(const k of ['customers','quotes','contracts'])check(Array.isArray(b.data[k])&&b.data[k].length<=10000,400,'업무 목록 형식 또는 개수를 확인해 주세요.');check(Array.isArray(b.employees)&&b.employees.length<=10000,400,'직원 목록 형식을 확인해 주세요.');const out=JSON.parse(JSON.stringify({data:b.data,employees:b.employees}));for(const a of [...Object.values(out.data),out.employees]){if(Array.isArray(a))for(const item of a)check(item&&typeof item==='object'&&!Array.isArray(item),400,'각 항목은 객체여야 합니다.');}return out;}
 function countsFor(s){return {customers:s.data.customers.length,quotes:s.data.quotes.length,contracts:s.data.contracts.length,signed:s.data.contracts.filter(c=>c.signed===true).length,employees:s.employees.length};}
@@ -208,6 +262,31 @@ async function route(req,res){
  if(p==='/api/device/info'&&m==='GET'){getSession(req);const d=one('SELECT phrase,expires FROM devices WHERE id=? AND used=0',u.searchParams.get('request')||'');check(d&&d.expires>Date.now(),404,'기기 연결 요청이 만료되었습니다.');return json(res,200,{phrase:d.phrase});}
  if(p==='/api/device/approve'&&m==='POST'){const s=getSession(req);writeGuard(req,s);check(Date.now()-s.created<600000,403,'다시 로그인한 후 기기를 연결해 주세요.');check(userInfo(s.actor).profileComplete,400,'기본정보 등록 후 연결해 주세요.');const b=await body(req);const d=one('SELECT * FROM devices WHERE id=?',text(b.requestId,100));check(d&&!d.used&&!d.user_id&&d.expires>Date.now()&&b.confirm===true,400,'연결 요청을 확인해 주세요.');run('UPDATE devices SET user_id=? WHERE id=?',s.actor,d.id);log(s.actor,'device.approve',d.id);return json(res,200,{ok:true});}
  if(p==='/api/device/poll'&&m==='POST'){writeGuard(req);limit(req,'device-poll:'+ip(req),240,600000);const b=await body(req),d=one('SELECT * FROM devices WHERE id=?',text(b.requestId,100));check(d&&!d.used&&d.expires>Date.now()&&/^[a-zA-Z0-9_-]{43,128}$/.test(b.verifier||'')&&equal(sha(b.verifier),d.challenge),400,'기기 연결 요청이 만료되었거나 확인되지 않았습니다.');if(!d.user_id)return json(res,202,{pending:true});check(one('SELECT status FROM users WHERE id=?',d.user_id)?.status==='active',403,'이용 제한된 계정입니다.');run('UPDATE devices SET used=1 WHERE id=?',d.id);return json(res,200,{ok:true,userId:d.user_id,...sessionCreate(req,res,d.user_id,'user','owner',true)});}
+
+ if(p==='/api/alimtalk/customer/preview'&&m==='POST'){
+  const s=getSession(req);writeGuard(req,s);limit(req,'customer-alim-preview:'+s.actor,45,600000);
+  const data=userAlimtalkRequest(s.actor,await body(req));
+  log(s.actor,'alimtalk.customer.preview',data.contractId,{kind:data.kind});
+  return json(res,200,{ok:true,dryRun:true,kind:data.kind,contractId:data.contractId,customer:data.customer,supplier:data.supplier,maskedTo:data.phoneMask,variables:data.options.variables,sendEnabled:alimtalkSendingAllowed('user')});
+ }
+ if(p==='/api/alimtalk/customer/send'&&m==='POST'){
+  const s=getSession(req);writeGuard(req,s);
+  check(alimtalkSendingAllowed('user'),503,'승인 템플릿 확인 및 회원 발송 설정 전입니다. 미리보기만 가능합니다.');
+  const b=await body(req);check(b.confirm===true,400,'회원의 발송 확인이 필요합니다.');
+  limit(req,'customer-alim-minute:'+s.actor,3,60000);limit(req,'customer-alim-day:'+s.actor,30,86400000);
+  const data=userAlimtalkRequest(s.actor,b);
+  const ref='contract:'+data.contractId;
+  const last=one("SELECT created FROM alimtalk_logs WHERE actor=? AND kind=? AND target_ref=? AND status='accepted' ORDER BY created DESC LIMIT 1",s.actor,data.kind,ref);
+  check(!last||Date.now()-last.created>=600000,429,'같은 계약에 대한 발송은 10분 후 다시 시도할 수 있습니다.');
+  let result;try{result=await sendAlimtalk(data);}catch{result={ok:false,status:0,result:{error:'외부 발송 서비스 연결 실패'}};}
+  const id=alimtalkResultLog(s.actor,data.kind,ref,data,result,result.ok?'accepted':'failed');
+  log(s.actor,'alimtalk.customer.send',ref,{kind:data.kind,accepted:result.ok});
+  return json(res,result.ok?200:502,{ok:result.ok,requestId:id,accepted:result.ok,notice:'SOLAPI 접수 결과이며 실제 수신 성공 여부는 발송내역 확인이 필요합니다.'});
+ }
+ if(p==='/api/alimtalk/customer/logs'&&m==='GET'){
+  const s=getSession(req);
+  return json(res,200,{items:all("SELECT id,kind,target_ref,phone_mask,status,created FROM alimtalk_logs WHERE actor=? AND target_ref LIKE 'contract:%' ORDER BY created DESC LIMIT 50",s.actor)});
+ }
  if(p==='/api/dispatch'&&m==='POST'){const s=getSession(req);writeGuard(req,s);const b=await body(req),record=dispatchValidate(b);const id=crypto.randomUUID();run('INSERT INTO dispatch(id,user_id,body,status,created) VALUES(?,?,?,?,?)',id,s.actor,seal(record),'접수대기',Date.now());log(s.actor,'dispatch.create',id,{equipment:record.equipment,date:record.date});return json(res,201,{ok:true,id,status:'접수대기',record});}
  if(p==='/api/dispatch'&&m==='GET'){const s=getSession(req);return json(res,200,{items:all('SELECT * FROM dispatch WHERE user_id=? ORDER BY created DESC',s.actor).map(d=>({id:d.id,status:d.status,created:d.created,...open(d.body)}))});}
  if(p==='/api/notices'&&m==='GET'){const s=getSession(req),now=Date.now();return json(res,200,{items:all("SELECT * FROM notices WHERE active=1 AND starts<=? AND ends>? AND (target='all' OR target=?) ORDER BY important DESC,created DESC",now,now,s.actor)});}
@@ -224,7 +303,7 @@ async function route(req,res){
  if(p==='/api/admin/alimtalk/send'&&m==='POST'){
   const s=mustAdmin(req,['owner']);writeGuard(req,s);limit(req,'alimtalk-send:'+s.actor,10,600000);check(env.SOLAPI_SEND_ENABLED==='true',503,'실제 알림톡 발송이 비활성화되어 있습니다. 검증 후 활성화하세요.');
   const b=await body(req);check(b.confirm===true&&b.purpose==='test',400,'테스트 발송 확인이 필요합니다.');
-  const data=alimtalkPreview(b),id=crypto.randomUUID(),masked=data.to.slice(0,3)+'****'+data.to.slice(-4);
+  check(env.SOLAPI_TEST_PHONE&&phone(b.to)===phone(env.SOLAPI_TEST_PHONE),403,'관리자 테스트는 등록된 테스트 번호로만 발송할 수 있습니다.');const data=alimtalkPreview(b),id=crypto.randomUUID(),masked=data.to.slice(0,3)+'****'+data.to.slice(-4);
   let result;try{result=await sendAlimtalk(data);}catch(e){result={ok:false,status:0,result:{error:'SOLAPI 요청 실패'}};}
   run('INSERT INTO alimtalk_logs(id,actor,kind,target_ref,phone_mask,template_id,status,response,created) VALUES(?,?,?,?,?,?,?,?,?)',id,s.actor,data.kind,'manual-test',masked,data.templateId,result.ok?'accepted':'failed',JSON.stringify(result.result).slice(0,4000),Date.now());
   log(s.actor,'alimtalk.send.test',id,{kind:data.kind,accepted:result.ok});return json(res,result.ok?200:502,{ok:result.ok,requestId:id,accepted:result.ok,providerStatus:result.status});
@@ -237,7 +316,19 @@ async function route(req,res){
  if(p==='/api/admin/dispatch'&&m==='GET'){const s=mustAdmin(req),full=s.role!=='viewer';log(s.actor,'dispatch.list','',{full});return json(res,200,{items:all('SELECT * FROM dispatch ORDER BY created DESC LIMIT 200').map(d=>{const b=open(d.body),user=one('SELECT profile FROM users WHERE id=?',d.user_id),up=user?open(user.profile):{};return{id:d.id,userId:d.user_id,status:d.status,revision:d.revision,created:d.created,customerName:b.customerName||up.businessName||up.representative||'',equipment:b.equipment,date:b.date,arrivalTime:b.arrivalTime||'',phone:full?b.phone:phoneMask(b.phone),address:full?b.address:b.address.split(' ').slice(0,2).join(' '),area:b.address.split(' ').slice(0,2).join(' '),goods:b.goods||'',floor:b.floor||'',note:b.note||'',minutes:b.minutes||30,estimatedAmount:b.estimatedAmount||0,requiresControlRoom:b.requiresControlRoom===true,controlRoomConfirmed:b.controlRoomConfirmed===true};})});}
  if(p==='/api/admin/dispatch'&&m==='POST'){const s=mustAdmin(req,['owner','operator']);writeGuard(req,s);const b=await body(req),userId=text(b.userId,100),user=one('SELECT id,status,profile FROM users WHERE id=?',userId);check(user&&user.status==='active',400,'등록할 원비즈 회원을 선택해 주세요.');const record=dispatchValidate(b.record||{}),id=crypto.randomUUID();run('INSERT INTO dispatch(id,user_id,body,status,created) VALUES(?,?,?,?,?)',id,userId,seal(record),'접수대기',Date.now());log(s.actor,'dispatch.admin.create',id,{userId,equipment:record.equipment,date:record.date});return json(res,201,{ok:true,id,status:'접수대기'});}
  if(/^\/api\/admin\/dispatch\/[^/]+$/.test(p)&&m==='POST'){const s=mustAdmin(req,['owner','operator']);writeGuard(req,s);const b=await body(req);check(text(b.reason).length>=5,400,'업무상 조회 사유를 입력해 주세요.');const d=one('SELECT * FROM dispatch WHERE id=?',p.split('/').pop());check(d,404,'요청이 없습니다.');log(s.actor,'dispatch.detail',d.id,{reason:text(b.reason)});return json(res,200,{id:d.id,userId:d.user_id,status:d.status,revision:d.revision,...open(d.body)});}
- if(/^\/api\/admin\/dispatch\/[^/]+$/.test(p)&&m==='PUT'){const s=mustAdmin(req,['owner','operator']);writeGuard(req,s);const b=await body(req),d=one('SELECT * FROM dispatch WHERE id=?',p.split('/').pop());check(d,404,'요청이 없습니다.');check(b.revision===d.revision,409,'다른 관리자가 수정했습니다. 다시 불러와 주세요.');const transitions={'접수대기':['확인중','배차완료','취소'],'확인중':['배차완료','취소'],'배차완료':['작업완료','취소'],'작업완료':[],'취소':[]},nextStatus=b.status===undefined?d.status:text(b.status,20);if(nextStatus!==d.status)check(transitions[d.status].includes(nextStatus),400,'허용되지 않는 상태 변경입니다.');const current=open(d.body),nextBody=b.record?dispatchValidate(b.record,current):current;run('UPDATE dispatch SET body=?,status=?,revision=revision+1 WHERE id=?',seal(nextBody),nextStatus,d.id);log(s.actor,'dispatch.update',d.id,{from:d.status,to:nextStatus,edited:!!b.record});return json(res,200,{ok:true,status:nextStatus,revision:d.revision+1});}
+ if(/^\/api\/admin\/dispatch\/[^/]+$/.test(p)&&m==='PUT'){const s=mustAdmin(req,['owner','operator']);writeGuard(req,s);const b=await body(req),d=one('SELECT * FROM dispatch WHERE id=?',p.split('/').pop());check(d,404,'요청이 없습니다.');check(b.revision===d.revision,409,'다른 관리자가 수정했습니다. 다시 불러와 주세요.');const transitions={'접수대기':['확인중','배차완료','취소'],'확인중':['배차완료','취소'],'배차완료':['작업완료','취소'],'작업완료':[],'취소':[]},nextStatus=b.status===undefined?d.status:text(b.status,20);if(nextStatus!==d.status)check(transitions[d.status].includes(nextStatus),400,'허용되지 않는 상태 변경입니다.');const current=open(d.body),nextBody=b.record?dispatchValidate(b.record,current):current;run('UPDATE dispatch SET body=?,status=?,revision=revision+1 WHERE id=?',seal(nextBody),nextStatus,d.id);log(s.actor,'dispatch.update',d.id,{from:d.status,to:nextStatus,edited:!!b.record});
+  const eventStatus=nextStatus!==d.status?nextStatus:null;
+  const notification=(eventStatus||b.record)?dispatchAlimtalkPlan(d,nextBody,eventStatus||nextStatus,!!b.record&&nextStatus===d.status):null;
+  let alert={state:'not_required'};
+  if(notification){
+   alert={state:notification.error?'needs_information':'preview_only',kind:notification.kind,...(notification.error?{reason:notification.error}:{maskedTo:notification.phoneMask})};
+   if(!notification.error&&alimtalkSendingAllowed('dispatch')){
+    let result;try{result=await sendAlimtalk(notification);}catch{result={ok:false,status:0,result:{error:'외부 발송 서비스 연결 실패'}};}
+    const target='dispatch:'+d.id+':'+(d.revision+1),id=alimtalkResultLog(d.user_id,notification.kind,target,notification,result,result.ok?'accepted':'failed');
+    alert={state:result.ok?'accepted':'failed',kind:notification.kind,requestId:id};
+   }
+  }
+  return json(res,200,{ok:true,status:nextStatus,revision:d.revision+1,notification:alert});}
  if(/^\/api\/admin\/dispatch\/[^/]+$/.test(p)&&m==='DELETE'){const s=mustAdmin(req,['owner','operator']);writeGuard(req,s);const id=p.split('/').pop(),d=one('SELECT * FROM dispatch WHERE id=?',id);check(d,404,'요청이 없습니다.');run('DELETE FROM dispatch WHERE id=?',id);log(s.actor,'dispatch.delete',id,{status:d.status,userId:d.user_id});return json(res,200,{ok:true});}
  if(p==='/api/admin/notices'&&m==='GET'){mustAdmin(req);return json(res,200,{items:all('SELECT * FROM notices ORDER BY created DESC LIMIT 200')});}
  if(p==='/api/admin/notices'&&m==='POST'){const s=mustAdmin(req,['owner','operator']);writeGuard(req,s);const b=await body(req),starts=Number(b.starts),ends=Number(b.ends),target=b.target||'all';check(text(b.title)&&text(b.body,4000)&&Number.isFinite(starts)&&Number.isFinite(ends)&&ends>starts,400,'제목·내용·게시기간을 확인해 주세요.');check(target==='all'||one('SELECT id FROM users WHERE id=?',text(target,100)),400,'대상 사용자를 확인해 주세요.');const id=crypto.randomUUID();run('INSERT INTO notices VALUES(?,?,?,?,?,?,?,?,?)',id,text(b.title,120),text(b.body,4000),target,starts,ends,b.important===true?1:0,1,Date.now());log(s.actor,'notice.create',id,{target});return json(res,201,{ok:true,id});}
