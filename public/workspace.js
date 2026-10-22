@@ -57,8 +57,8 @@
   function fullAddr(a, b) { return [a,b].map(x => String(x || '').trim()).filter(Boolean).join(' '); }
   function quoteSupply(q) { return (q.items || []).reduce((s,i) => s + num(i.qty) * num(i.unitPrice), 0); }
   function quoteDiscounted(q) { return Math.max(0, quoteSupply(q) - num(q.discountAmount)); }
-  function quoteVat(q) { return q.vatEnabled === false ? 0 : Math.round(quoteDiscounted(q) * .1); }
-  function quoteTotal(q) { return quoteDiscounted(q) + quoteVat(q); }
+  function quoteVat(q) { const amount=quoteDiscounted(q);return q.vatEnabled===false?0:Number(q.pricingVersion)>=2?Math.round(amount*10/110):Math.round(amount*.1); }
+  function quoteTotal(q) { return Number(q.pricingVersion)>=2&&q.vatEnabled!==false?quoteDiscounted(q):quoteDiscounted(q)+quoteVat(q); }
   function receivable(c) { return Math.max(0, num(c.amount) - num(c.paidAmount)); }
   function nextId(prefix, list) {
     const year = new Date().getFullYear();
@@ -302,8 +302,37 @@
   }
 
   function printQuote(q) {
-    const p = snapshot.profile || {};
-    printArea.innerHTML = `<div class="print-sheet"><div class="print-head"><div><h1>견적서</h1><div>${esc(p.businessName||'ONEBIZ')}</div></div><div class="print-meta">견적번호 ${esc(q.id)}<br>작성일 ${esc(q.createdAt||'')}</div></div><div class="print-party"><div class="print-box"><b>공급자</b><br>${esc(p.businessName||'-')}<br>대표 ${esc(p.representative||'-')}<br>${esc(p.phone||'')}</div><div class="print-box"><b>고객</b><br>${esc(q.customer)}<br>${esc(phone(q.phone))}<br>${esc(fullAddr(q.siteAddress,q.siteAddressDetail)||'-')}</div></div><table class="print-table"><thead><tr><th>품목명</th><th>규격</th><th>수량</th><th>단가</th><th>금액</th></tr></thead><tbody>${(q.items||[]).map(i=>`<tr><td>${esc(i.name)}</td><td>${esc(i.spec||'')}</td><td>${num(i.qty)}</td><td>${won(i.unitPrice)}</td><td>${won(num(i.qty)*num(i.unitPrice))}</td></tr>`).join('')}</tbody></table><div class="print-total">합계 ${won(quoteTotal(q))}</div><div class="print-note">${esc(q.note||'')}\n견적 유효기간: ${num(q.validityDays)||15}일${q.vatEnabled===false?' · 부가세 별도':''}</div><div class="print-footer">${esc(p.businessName||'ONEBIZ')}</div></div>`;
+    const p=snapshot.profile||{},company=p.businessName||'사업자 정보 미등록';
+    const fmt=n=>new Intl.NumberFormat('ko-KR').format(Math.round(Number(n)||0));
+    const date=/^\d{4}-\d{2}-\d{2}$/.test(String(q.createdAt||''))?String(q.createdAt):today();
+    const days=Math.max(1,Math.min(365,Number(q.validityDays)||15));
+    const expiry=new Date(Date.parse(date+'T12:00:00Z')+days*86400000).toISOString().slice(0,10);
+    const supply=quoteDiscounted(q)-(Number(q.pricingVersion)>=2&&q.vatEnabled!==false?quoteVat(q):0);
+    const supplierInfo=['공급자  '+company,'대표 '+(p.representative||'-'),'사업자번호 '+(p.registrationNo||'-')].join(' · ');
+    const items=(q.items||[]).map(i=>`<tr>
+     <td class="obq-item">${esc(i.name||'-')}${i.spec?`<small>규격: ${esc(i.spec)}</small>`:''}</td>
+     <td class="obq-center">${num(i.qty)}</td>
+     <td class="obq-num">${fmt(i.unitPrice)}</td>
+     <td class="obq-num">${fmt(num(i.qty)*num(i.unitPrice))}</td>
+    </tr>`).join('');
+    printArea.innerHTML=`<div class="obq-sheet">
+     <div class="obq-content">
+      <header class="obq-head"><div><h1>${esc(company)}</h1><b>견적서</b></div><div class="obq-meta"><span>${esc(q.id||'-')}</span><span>${esc(date)}</span></div></header>
+      <div class="obq-rule"></div>
+      <div class="obq-supplier"><p>${esc(supplierInfo)}</p>${fullAddr(p.address,p.addressDetail)?`<p>사업장  ${esc(fullAddr(p.address,p.addressDetail))}</p>`:''}</div>
+      <section class="obq-customer"><b>고객명  ${esc(q.customer||'-')}</b><p>연락처  ${esc(phone(q.phone)||'-')}</p><p>현장주소  ${esc(fullAddr(q.siteAddress,q.siteAddressDetail)||'미등록')}</p></section>
+      <table class="obq-items"><colgroup><col style="width:47%"><col style="width:10%"><col style="width:19%"><col style="width:24%"></colgroup><thead><tr><th>품목</th><th class="obq-center">수량</th><th class="obq-num">단가</th><th class="obq-num">금액</th></tr></thead><tbody>${items||'<tr><td colspan="4">등록된 품목이 없습니다.</td></tr>'}</tbody></table>
+      <div class="obq-totals">
+       ${num(q.discountAmount)>0?`<div><span>할인</span><span>-${fmt(q.discountAmount)}</span></div>`:''}
+       <div><span>공급가액</span><span>${fmt(supply)}</span></div>
+       ${q.vatEnabled!==false?`<div><span>부가세</span><span>${fmt(quoteVat(q))}</span></div>`:''}
+       <div class="obq-grand"><b>총 견적금액</b><b>${fmt(quoteTotal(q))}</b></div>
+       ${q.vatEnabled===false?'<small>부가세 별도</small>':''}
+      </div>
+      <div class="obq-end"><p>견적 유효기간: ${esc(expiry)}</p>${q.note?`<p>특이사항: ${esc(q.note)}</p>`:''}</div>
+     </div>
+     <footer>${esc(company)} · A4 인쇄용 · 기본형</footer>
+    </div>`;
     window.print();
   }
 
