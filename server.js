@@ -3,6 +3,7 @@ const http=require('node:http'),fs=require('node:fs'),path=require('node:path'),
 const {createStore}=require('./lib/store');
 const {HttpError,check,random,equal,sha,phone,text,passwordHash,totp}=require('./lib/security');
 const provider=require('./lib/providers');
+const templateInspector=require('./lib/solapi-template-inspector');
 const env=process.env,mode=env.APP_MODE||'production',demo=mode==='demo',test=mode==='test',local=demo||test;
 check(['production','demo','test'].includes(mode),500,'Invalid APP_MODE');
 const host=local?'127.0.0.1':'0.0.0.0';const port=Number(env.PORT||10000);
@@ -300,6 +301,19 @@ async function route(req,res){
  }
  if(p==='/api/admin/me'&&m==='GET'){const s=mustAdmin(req);return json(res,200,{csrf:s.csrf,role:s.role,username:one('SELECT username FROM admins WHERE id=?',s.actor).username});}
  if(p==='/api/admin/logout'&&m==='POST'){const s=mustAdmin(req);writeGuard(req,s);run('DELETE FROM sessions WHERE hash=?',s.hash);setCookie(res,'ob_admin','',0);return json(res,200,{ok:true});}
+ if(p==='/api/admin/alimtalk/provider-check'&&m==='GET'){
+  const s=mustAdmin(req,['owner','operator']);
+  limit(req,'alimtalk-provider-check:'+s.actor,12,3600000);
+  check(env.SOLAPI_API_KEY&&env.SOLAPI_API_SECRET,503,'SOLAPI 인증정보를 확인해 주세요.');
+  const sendable=await templateInspector.sendable(alimtalkAuth);
+  const registry=[...Object.entries(alimtalkKinds).map(([kind,t])=>({
+   kind,name:({contractSign:'계약서 서명 요청',receivable:'미수금 지급 요청',dispatchRequest:'장비배차 접수 안내',dispatchChange:'장비배차 변경 안내',dispatchDone:'장비배차 완료',dispatchCancel:'장비배차 취소'})[kind],
+   envKey:t.envKey,fields:t.fields,reviewStatus:'검수완료'
+  })),...alimtalkAdditionalRegistry.map(t=>({...t,kind:t.envKey,fields:null}))];
+  const items=templateInspector.inspect(registry,sendable,env);
+  log(s.actor,'alimtalk.provider.read',String(items.length),{sendable:items.filter(x=>x.providerSendable).length});
+  return json(res,200,{ok:true,checkedAt:Date.now(),sendableCount:items.filter(x=>x.providerSendable).length,items});
+ }
  if(p==='/api/admin/alimtalk/templates'&&m==='GET'){mustAdmin(req);return json(res,200,{sendEnabled:env.SOLAPI_SEND_ENABLED==='true',kinds:Object.fromEntries(Object.entries(alimtalkKinds).map(([k,v])=>[k,{configured:!!env[v.envKey],reviewStatus:'검수완료',variableVerification:'pending',variables:v.fields}])),templateSummary:{total:25,approved:21,underReview:4},additionalTemplates:alimtalkAdditionalRegistry.map(t=>({name:t.name,configured:!!env[t.envKey],reviewStatus:t.reviewStatus,variableVerification:'pending',sendAvailable:false}))});}
  if(p==='/api/admin/alimtalk/preview'&&m==='POST'){const s=mustAdmin(req,['owner','operator']);writeGuard(req,s);limit(req,'alimtalk-preview:'+s.actor,60,600000);const data=alimtalkPreview(await body(req));log(s.actor,'alimtalk.preview',data.kind,{templateId:data.templateId});return json(res,200,{ok:true,dryRun:true,kind:data.kind,templateId:data.templateId,maskedTo:data.to.slice(0,3)+'****'+data.to.slice(-4),variables:data.options.variables});}
  if(p==='/api/admin/alimtalk/send'&&m==='POST'){
