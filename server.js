@@ -315,6 +315,28 @@ async function route(req,res){
   const s=getSession(req);writeGuard(req,s);
   throw new HttpError(503,'견적서 발송 안내는 검수 및 변수·링크 연결 확인 전이므로 실제 발송이 중단되어 있습니다.');
  }
+ if(p==='/api/alimtalk/customer/contract/preflight'&&m==='POST'){
+  const session=getSession(req);writeGuard(req,session);limit(req,'alimtalk-sign-preflight:'+session.actor,25,600000);
+  const request=await body(req),contractId=text(request.contractId,100);
+  check(contractId,400,'계약서 번호를 확인해 주세요.');
+  const snapshot=one('SELECT body FROM snapshots WHERE user_id=?',session.actor);
+  check(snapshot,404,'계약서를 먼저 원비즈 계정에 동기화해 주세요.');
+  const contract=(open(snapshot.body).data?.contracts||[]).find(x=>String(x.id)===contractId);
+  check(contract,404,'내 계약서에서 서명 요청 대상을 찾을 수 없습니다.');
+  check(contract.signed!==true,400,'이미 서명이 완료된 계약서입니다.');
+  const recipient=phone(contract.phone);
+  check(text(contract.customer,80),400,'계약 상대방 이름이 필요합니다.');
+  const profile=one('SELECT profile FROM users WHERE id=?',session.actor);
+  const supplier=profile?open(profile.profile):{};
+  check(text(supplier.businessName||supplier.representative,120),400,'발신 업체 정보를 등록해 주세요.');
+  check(!!env.SOLAPI_TEMPLATE_CONTRACT_SIGN,503,'계약서 서명 요청 템플릿이 등록되지 않았습니다.');
+  const access=templateInspector.health().access,enabled=alimtalkSendingAllowed('user')&&access==='ok';
+  const reason=!alimtalkSendingAllowed('user')?'알림톡 발송 설정이 꺼져 있습니다.':
+   access!=='ok'?'SOLAPI 승인 템플릿 조회에 실패하고 있습니다. 실제 알림톡은 전송되지 않으며, 카카오톡 공유 버튼으로 링크를 전송할 수 있습니다.':'';
+  log(session.actor,'alimtalk.contract.preflight',contractId,{ready:enabled});
+  return json(res,200,{ok:true,dryRun:true,kind:'contractSign',contractId,customer:contract.customer,
+   maskedTo:phoneMask(recipient),sendEnabled:enabled,gateway:access,reason});
+ }
  if(p==='/api/alimtalk/customer/preview'&&m==='POST'){
   const s=getSession(req);writeGuard(req,s);limit(req,'customer-alim-preview:'+s.actor,45,600000);
   const data=userAlimtalkRequest(s.actor,await body(req));
