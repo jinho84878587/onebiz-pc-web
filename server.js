@@ -115,6 +115,22 @@ async function sendAlimtalk(msg){
  finally{clearTimeout(timer);}
 }
 
+function memberQuoteSendInfo(actor,quoteId){
+ const row=one('SELECT body FROM snapshots WHERE user_id=?',actor);
+ check(row,404,'견적서를 원비즈 계정에 동기화한 뒤 다시 시도해 주세요.');
+ const q=(open(row.body).data?.quotes||[]).find(x=>String(x.id)===quoteId);
+ check(q,404,'내 견적 목록에 해당 견적서가 없습니다. 동기화 상태를 확인해 주세요.');
+ const to=phone(q.phone),customer=text(q.customer,80);
+ check(customer,400,'견적 고객명을 확인해 주세요.');
+ const p=one('SELECT profile FROM users WHERE id=?',actor);
+ const profile=p?open(p.profile):{},supplier=text(profile.businessName||profile.representative,120);
+ check(supplier,400,'발신 업체명을 내 정보에 등록해 주세요.');
+ const supply=quoteSupply(q),discounted=supply,
+  finalAmount=Number(q.pricingVersion)>=2&&q.vatEnabled!==false?discounted:discounted+(q.vatEnabled===false?0:Math.round(discounted*.1));
+ const expires=quoteValidUntil(q);
+ check(expires>Date.now(),400,'견적 유효기간이 지났습니다. 견적서를 수정해 주세요.');
+ return {q,to,customer,supplier,finalAmount:Math.round(finalAmount),expires};
+}
 function userAlimtalkRequest(actor,input){
  const kind=text(input.kind,40),contractId=text(input.contractId,100);
  check(['contractSign','receivable'].includes(kind),400,'회원이 직접 발송할 수 있는 안내를 선택해 주세요.');
@@ -303,25 +319,46 @@ async function route(req,res){
 
  if(p==='/api/alimtalk/customer/quote/preview'&&m==='POST'){
   const s=getSession(req);writeGuard(req,s);limit(req,'alimtalk-quote-preview:'+s.actor,30,600000);
-  const b=await body(req),quoteId=text(b.quoteId,100);
-  check(quoteId,400,'견적번호를 확인해 주세요.');
-  const row=one('SELECT body FROM snapshots WHERE user_id=?',s.actor);
-  check(row,404,'견적서를 원비즈 계정에 동기화한 뒤 다시 시도해 주세요.');
-  const q=(open(row.body).data?.quotes||[]).find(x=>String(x.id)===quoteId);
-  check(q,404,'내 견적 목록에 해당 견적서가 없습니다. 동기화 상태를 확인해 주세요.');
-  const raw=String(q.phone||'').replace(/[^0-9]/g,'');
-  check(/^010[0-9]{8}$/.test(raw),400,'견적서의 고객 휴대폰번호를 확인해 주세요.');
+  const b=await body(req),quoteId=text(b.quoteId,100);check(quoteId,400,'견적번호를 확인해 주세요.');
+  const details=memberQuoteSendInfo(s.actor,quoteId);
   const template=alimtalkAdditionalRegistry.find(t=>t.envKey==='SOLAPI_TEMPLATE_QUOTE');
-  const reviewing=template?.reviewStatus!=='검수완료';
-  const reason=reviewing?'견적서 발송 안내 템플릿이 SOLAPI 검수진행중입니다. 고객에게 알림톡을 보내지 않았습니다. 견적 목록에서 카카오톡 PDF 공유를 이용할 수 있습니다.':'견적서 발송 안내의 승인 문구·변수 및 견적 확인 링크 연동 검증이 완료되지 않았습니다. 고객에게 알림톡을 보내지 않았습니다.';
-  log(s.actor,'alimtalk.quote.preview',quoteId,{reviewing});
-  return json(res,200,{ok:true,dryRun:true,kind:'quote',quoteId,
-   reviewStatus:template?.reviewStatus||'미확인',maskedTo:phoneMask(raw),
-   sendEnabled:false,reason});
+  check(template?.reviewStatus==='검수완료',503,'견적서 발송 알림톡이 아직 검수완료되지 않았습니다.');
+  const h=templateInspector.health(),ready=alimtalkSendingAllowed('user')&&h.access==='ok';
+  return json(res,200,{ok:true,dryRun:true,kind:'quote',quoteId,customer:details.customer,
+   maskedTo:phoneMask(details.to),supplier:details.supplier,amount:details.finalAmount,
+   reviewStatus:template.reviewStatus,sendEnabled:ready,gateway:h.access,
+   reason:ready?'':h.access!=='ok'?'SOLAPI 연결 상태를 확인해 주세요. 발송되지 않았습니다.':'원비즈 회원 알림톡 발송이 비활성화되어 있습니다.'});
  }
  if(p==='/api/alimtalk/customer/quote/send'&&m==='POST'){
   const s=getSession(req);writeGuard(req,s);
-  throw new HttpError(503,'견적서 발송 안내는 검수 및 변수·링크 연결 확인 전이므로 실제 발송이 중단되어 있습니다.');
+  check(alimtalkSendingAllowed('user'),503,'회원 알림톡 발송이 비활성화되어 있습니다.');
+  const b=await body(req),quoteId=text(b.quoteId,100);
+  check(quoteId&&b.confirm===true,400,'견적서 선택 및 발송 확인이 필요합니다.');
+  limit(req,'alimtalk-quote-minute:'+s.actor,3,60000);
+  limit(req,'alimtalk-quote-day:'+s.actor,30,86400000);
+  const info=memberQuoteSendInfo(s.actor,quoteId),ref='quote:'+quoteId;
+  const recent=one("SELECT created FROM alimtalk_logs WHERE actor=? AND kind='quote' AND target_ref=? AND status='accepted' ORDER BY created DESC LIMIT 1",s.actor,ref);
+  check(!recent||Date.now()-recent.created>=600000,429,'같은 견적서에 대한 발송은 10분 후 다시 시도할 수 있습니다.');
+  check(!!env.SOLAPI_TEMPLATE_QUOTE&&!!env.SOLAPI_PFID,503,'견적서 발송 템플릿 또는 채널 설정이 없습니다.');
+  const templates=await templateInspector.sendable(alimtalkAuth),template=templates.find(t=>t.templateId===env.SOLAPI_TEMPLATE_QUOTE);
+  check(template,503,'SOLAPI 발송 가능 목록에 견적서 안내 템플릿이 없습니다.');
+  const links=Array.isArray(template.buttons)?template.buttons:[];
+  check(links.some(x=>String(x.linkMo||x.linkPc||'').includes('#{문서토큰}')&&
+   String(x.linkMo||x.linkPc||'').includes('/quote/')),503,'견적서 확인 버튼의 승인 URL이 원비즈 문서 링크와 일치하지 않습니다. 발송이 중단됐습니다.');
+  const token=random(),expires=info.expires;
+  const message={kind:'quote',to:info.to,templateId:env.SOLAPI_TEMPLATE_QUOTE,options:{
+   pfId:env.SOLAPI_PFID,templateId:env.SOLAPI_TEMPLATE_QUOTE,disableSms:true,
+   variables:{'#{고객명}':info.customer,'#{업체명}':info.supplier,'#{견적금액}':info.finalAmount.toLocaleString('ko-KR'),'#{문서토큰}':token}
+  }};
+  run('INSERT OR REPLACE INTO quote_links(token_hash,user_id,quote_id,expires,created,last_view) VALUES(?,?,?,?,?,0)',hash(token),s.actor,quoteId,expires,Date.now());
+  let result;
+  try{result=await sendAlimtalk(message);}
+  catch(e){result={ok:false,status:e.status||0,result:{error:e.status?text(e.message,150):'SOLAPI 요청을 완료하지 못했습니다.'}};}
+  if(!result.ok)run('DELETE FROM quote_links WHERE token_hash=?',hash(token));
+  const id=alimtalkResultLog(s.actor,'quote',ref,{to:info.to,phoneMask:phoneMask(info.to),templateId:message.templateId},result,result.ok?'accepted':'failed');
+  log(s.actor,'alimtalk.quote.send',quoteId,{accepted:result.ok});
+  return json(res,result.ok?200:502,{ok:result.ok,accepted:result.ok,requestId:id,
+   ...(result.ok?{notice:'SOLAPI 접수 성공입니다. 실제 수신 완료 여부는 발송내역에서 확인해 주세요.'}:{error:'SOLAPI 발송 요청이 실패했습니다. 실제 수신 여부와 발송내역을 확인해 주세요.'})});
  }
  if(p==='/api/alimtalk/customer/contract/preflight'&&m==='POST'){
   const session=getSession(req);writeGuard(req,session);limit(req,'alimtalk-sign-preflight:'+session.actor,25,600000);
