@@ -291,6 +291,28 @@ async function route(req,res){
  if(p==='/api/device/approve'&&m==='POST'){const s=getSession(req);writeGuard(req,s);check(Date.now()-s.created<600000,403,'다시 로그인한 후 기기를 연결해 주세요.');check(userInfo(s.actor).profileComplete,400,'기본정보 등록 후 연결해 주세요.');const b=await body(req);const d=one('SELECT * FROM devices WHERE id=?',text(b.requestId,100));check(d&&!d.used&&!d.user_id&&d.expires>Date.now()&&b.confirm===true,400,'연결 요청을 확인해 주세요.');run('UPDATE devices SET user_id=? WHERE id=?',s.actor,d.id);log(s.actor,'device.approve',d.id);return json(res,200,{ok:true});}
  if(p==='/api/device/poll'&&m==='POST'){writeGuard(req);limit(req,'device-poll:'+ip(req),240,600000);const b=await body(req),d=one('SELECT * FROM devices WHERE id=?',text(b.requestId,100));check(d&&!d.used&&d.expires>Date.now()&&/^[a-zA-Z0-9_-]{43,128}$/.test(b.verifier||'')&&equal(sha(b.verifier),d.challenge),400,'기기 연결 요청이 만료되었거나 확인되지 않았습니다.');if(!d.user_id)return json(res,202,{pending:true});check(one('SELECT status FROM users WHERE id=?',d.user_id)?.status==='active',403,'이용 제한된 계정입니다.');run('UPDATE devices SET used=1 WHERE id=?',d.id);return json(res,200,{ok:true,userId:d.user_id,...sessionCreate(req,res,d.user_id,'user','owner',true)});}
 
+ if(p==='/api/alimtalk/customer/quote/preview'&&m==='POST'){
+  const s=getSession(req);writeGuard(req,s);limit(req,'alimtalk-quote-preview:'+s.actor,30,600000);
+  const b=await body(req),quoteId=text(b.quoteId,100);
+  check(quoteId,400,'견적번호를 확인해 주세요.');
+  const row=one('SELECT body FROM snapshots WHERE user_id=?',s.actor);
+  check(row,404,'견적서를 원비즈 계정에 동기화한 뒤 다시 시도해 주세요.');
+  const q=(open(row.body).data?.quotes||[]).find(x=>String(x.id)===quoteId);
+  check(q,404,'내 견적 목록에 해당 견적서가 없습니다. 동기화 상태를 확인해 주세요.');
+  const raw=String(q.phone||'').replace(/[^0-9]/g,'');
+  check(/^010[0-9]{8}$/.test(raw),400,'견적서의 고객 휴대폰번호를 확인해 주세요.');
+  const template=alimtalkAdditionalRegistry.find(t=>t.envKey==='SOLAPI_TEMPLATE_QUOTE');
+  const reviewing=template?.reviewStatus!=='검수완료';
+  const reason=reviewing?'견적서 발송 안내 템플릿이 SOLAPI 검수진행중입니다. 고객에게 알림톡을 보내지 않았습니다. 견적 목록에서 카카오톡 PDF 공유를 이용할 수 있습니다.':'견적서 발송 안내의 승인 문구·변수 및 견적 확인 링크 연동 검증이 완료되지 않았습니다. 고객에게 알림톡을 보내지 않았습니다.';
+  log(s.actor,'alimtalk.quote.preview',quoteId,{reviewing});
+  return json(res,200,{ok:true,dryRun:true,kind:'quote',quoteId,
+   reviewStatus:template?.reviewStatus||'미확인',maskedTo:phoneMask(raw),
+   sendEnabled:false,reason});
+ }
+ if(p==='/api/alimtalk/customer/quote/send'&&m==='POST'){
+  const s=getSession(req);writeGuard(req,s);
+  throw new HttpError(503,'견적서 발송 안내는 검수 및 변수·링크 연결 확인 전이므로 실제 발송이 중단되어 있습니다.');
+ }
  if(p==='/api/alimtalk/customer/preview'&&m==='POST'){
   const s=getSession(req);writeGuard(req,s);limit(req,'customer-alim-preview:'+s.actor,45,600000);
   const data=userAlimtalkRequest(s.actor,await body(req));
