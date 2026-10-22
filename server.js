@@ -112,7 +112,7 @@ function userAlimtalkRequest(actor,input){
  return {...data,actor,contractId,customer,supplier,phoneMask:phoneMask(recipient)};
 }
 function dispatchAlimtalkPlan(dispatchRow,record,status,changed){
- const kind=status==='확인중'?'dispatchRequest':status==='배차완료'?'dispatchDone':status==='취소'?'dispatchCancel':changed?'dispatchChange':null;
+ const kind=changed&&status!=='작업완료'&&status!=='취소'?'dispatchChange':status==='확인중'?'dispatchRequest':status==='배차완료'&&!changed?'dispatchDone':status==='취소'?'dispatchCancel':null;
  if(!kind)return null;
  const user=one('SELECT profile,status FROM users WHERE id=?',dispatchRow.user_id);
  if(!user||user.status!=='active')return {kind,error:'신청 회원 계정 확인 필요'};
