@@ -79,6 +79,12 @@ function alimtalkPreview(input){
  return {kind,to,templateId,options:opts};
 }
 async function sendAlimtalk(msg){
+ const templateId=msg?.options?.templateId||'';
+ const permitted=[...Object.values(alimtalkKinds).map(t=>t.envKey),
+  ...alimtalkAdditionalRegistry.filter(t=>t.reviewStatus==='검수완료').map(t=>t.envKey)]
+  .filter(key=>!alimtalkPausedTemplateKeys.has(key));
+ check(permitted.some(key=>env[key]&&env[key]===templateId),403,'원비즈에서 사용 승인된 템플릿이 아닙니다.');
+
  check(!alimtalkTemplatePaused(msg?.options?.templateId),403,'운영자가 발송 중단한 알림톡 템플릿입니다.');
  check(env.SOLAPI_API_KEY&&env.SOLAPI_API_SECRET&&env.SOLAPI_PFID,503,'SOLAPI 인증이 설정되지 않았습니다.');
  const approved=await templateInspector.sendable(alimtalkAuth);
@@ -88,7 +94,16 @@ async function sendAlimtalk(msg){
  const requestedNames=Object.keys(msg.options.variables||{}).map(k=>k.replace(/^#\{/,'').replace(/\}$/,'')).sort((a,b)=>a.localeCompare(b,'ko'));
  check(actualNames.length===requestedNames.length&&actualNames.every((x,i)=>x===requestedNames[i]),403,'승인 템플릿 변수명과 원비즈 전송 변수가 일치하지 않습니다.');
  const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),15000);
- try{const r=await fetch('https://api.solapi.com/messages/v4/send-many/detail',{method:'POST',headers:{'Content-Type':'application/json',Authorization:alimtalkAuth()},body:JSON.stringify({messages:[{to:msg.to,kakaoOptions:msg.options}]}),signal:ctrl.signal});const result=await r.json();return {ok:r.ok,status:r.status,result};}
+ try{
+ const r=await fetch('https://api.solapi.com/messages/v4/send-many/detail',{
+  method:'POST',headers:{'Content-Type':'application/json',Authorization:alimtalkAuth()},
+  body:JSON.stringify({messages:[{to:msg.to,kakaoOptions:msg.options}],strict:true,showMessageList:true,allowDuplicates:false}),signal:ctrl.signal
+ });
+ const result=await r.json(),counts=result?.groupInfo?.count;
+ const accepted=r.ok&&Number(counts?.registeredSuccess)===1&&Number(counts?.registeredFailed||0)===0&&
+   Array.isArray(result.failedMessageList)&&result.failedMessageList.length===0;
+ return {ok:accepted,status:r.status,result};
+}
  finally{clearTimeout(timer);}
 }
 
@@ -143,7 +158,7 @@ function alimtalkResultLog(actor,kind,targetRef,data,result,status){
  return id;
 }
 function alimtalkSendingAllowed(mode){
- return env.SOLAPI_SEND_ENABLED==='true'&&env.SOLAPI_TEMPLATE_VARIABLES_VERIFIED==='true'&&(mode==='user'?env.SOLAPI_MEMBER_SEND_ENABLED==='true':env.SOLAPI_DISPATCH_AUTO_ENABLED==='true');
+ return env.SOLAPI_SEND_ENABLED==='true'&&(mode==='user'?env.SOLAPI_MEMBER_SEND_ENABLED==='true':env.SOLAPI_DISPATCH_AUTO_ENABLED==='true');
 }
 function dispatchValidate(b,previous={}){const pick=(k,d='')=>b[k]!==undefined?b[k]:(previous[k]!==undefined?previous[k]:d);const customerName=text(pick('customerName'),80),equipment=text(pick('equipment'),30),address=text(pick('address'),300),date=text(pick('date'),20),arrivalTime=text(pick('arrivalTime'),10),floor=text(pick('floor'),30),goods=text(pick('goods'),200),note=text(pick('note'),500),minutes=Number(pick('minutes',30)),phoneValue=phone(pick('phone')),estimatedAmount=Math.max(0,Math.round(Number(pick('estimatedAmount',0))||0)),requiresControlRoom=pick('requiresControlRoom',false)===true,controlRoomConfirmed=pick('controlRoomConfirmed',false)===true;check(['사다리차','스카이차','크레인'].includes(equipment),400,'장비를 선택해 주세요.');check(address&&/^\d{4}-\d{2}-\d{2}$/.test(date),400,'주소와 날짜를 확인해 주세요.');if(arrivalTime)check(/^([01]\d|2[0-3]):[0-5]\d$/.test(arrivalTime),400,'도착시간을 확인해 주세요.');check(Number.isInteger(minutes)&&minutes>=30&&minutes<=1440&&minutes%30===0,400,'사용시간은 30분 단위로 입력해 주세요.');check(estimatedAmount<=100000000,400,'예상요금을 확인해 주세요.');return {customerName,equipment,address,date,arrivalTime,floor,goods,note,minutes,phone:phoneValue,estimatedAmount,requiresControlRoom,controlRoomConfirmed};}
 function snapshotValidate(b){check(b.data&&typeof b.data==='object'&&!Array.isArray(b.data),400,'업무 데이터를 확인해 주세요.');for(const k of ['customers','quotes','contracts'])check(Array.isArray(b.data[k])&&b.data[k].length<=10000,400,'업무 목록 형식 또는 개수를 확인해 주세요.');check(Array.isArray(b.employees)&&b.employees.length<=10000,400,'직원 목록 형식을 확인해 주세요.');const out=JSON.parse(JSON.stringify({data:b.data,employees:b.employees}));for(const a of [...Object.values(out.data),out.employees]){if(Array.isArray(a))for(const item of a)check(item&&typeof item==='object'&&!Array.isArray(item),400,'각 항목은 객체여야 합니다.');}return out;}
