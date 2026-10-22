@@ -67,7 +67,7 @@ function alimtalkPreview(input){
  const kind=text(input.kind,40),type=alimtalkKinds[kind];check(type,400,'지원되지 않는 알림톡 종류입니다.');
  const templateId=env[type.envKey];check(templateId&&env.SOLAPI_PFID,503,'템플릿 또는 채널 설정이 완료되지 않았습니다.');
  const to=String(input.to||'').replace(/[^0-9]/g,'');check(/^01[016789][0-9]{7,8}$/.test(to),400,'수신번호를 확인해 주세요.');
- const vars={};for(const key of type.fields){const value=text((input.variables||{})[key],500);check(value,400,key+' 값을 입력해 주세요.');vars['#{'+key+'}']=value;}
+ const vars={};for(const key of type.fields){const value=text((input.variables||{})[key],500);check(value,400,key+' 값을 입력해 주세요.');if(['사용일','변경사용일','지급예정일'].includes(key)){check(/^\d{4}-\d{2}-\d{2}$/.test(value)&&!Number.isNaN(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value,400,key+'은 YYYY-MM-DD 날짜 형식으로 입력해 주세요.');}vars['#{'+key+'}']=value;}
  const opts={pfId:env.SOLAPI_PFID,templateId,disableSms:true,variables:vars};
  if(kind==='contractSign'){const url='https://'+vars['#{서명링크}'].replace(/^https?:\/\//,'');check(/^https:\/\/[-a-z0-9.]+\/[a-zA-Z0-9_/?=&%-]+$/i.test(url)&&new URL(url).hostname.endsWith('.onrender.com'),400,'서명 링크가 올바르지 않습니다.');opts.variables['#{서명링크}']=url.slice(8);}
  return {kind,to,templateId,options:opts};
