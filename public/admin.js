@@ -17,11 +17,31 @@ async function render(){root.innerHTML=`<div class="shell"><aside class="sidebar
 const metric=(label,n,sub)=>`<div class="metric"><span>${label}</span><strong>${n}</strong><small>${sub}</small></div>`;
 async function alimtalk(){
  const config=await api('alimtalk/templates');const labels={contractSign:'계약서 서명 요청',receivable:'미수금 지급 요청',dispatchRequest:'장비배차 접수',dispatchChange:'장비배차 변경',dispatchDone:'장비배차 완료',dispatchCancel:'장비배차 취소'};
+ const templateChoices=[
+  ...Object.entries(config.kinds).map(([kind,v])=>({key:kind,name:labels[kind]||kind,reviewStatus:v.reviewStatus||'검수완료',configured:v.configured,variables:v.variables||[],previewSupported:true})),
+  ...(config.additionalTemplates||[]).map((v,i)=>({key:'additional:'+i,name:v.name,reviewStatus:v.reviewStatus,configured:v.configured,variables:[],previewSupported:false}))
+ ];
+ const optionHtml=(status)=>templateChoices.filter(x=>x.reviewStatus===status).map(x=>`<option value="${esc(x.key)}">${esc(x.name)} · ${esc(x.reviewStatus)}${x.configured?'':' (서버 미등록)'}${x.previewSupported?'':' · 변수 확인 전'}</option>`).join('');
+
  $('#page').innerHTML=`<div class="section-head"><div><h3>관리자용 알림톡 템플릿 검증</h3><p class="muted">총 ${config.templateSummary?.total||25}개 · 검수완료 ${config.templateSummary?.approved||21}개 · 검수진행중 ${config.templateSummary?.underReview||4}개</p></div><span class="tag">${config.sendEnabled?'테스트 발송 허용':'미리보기 전용 · 실제 발송 잠금'}</span></div>
- <div class="card"><p class="notice">회원의 거래 고객 알림톡은 회원이 직접 견적·계약·대금 화면에서 발송합니다. 이 화면은 템플릿 변수 검증과 등록된 테스트번호 발송만을 위한 관리자 도구입니다.</p><label>템플릿 선택<select id="alimKind">${Object.entries(config.kinds).map(([k,v])=>`<option value="${k}" ${v.configured?'':'disabled'}>${labels[k]} ${v.configured?'':'(템플릿 없음)'}</option>`).join('')}</select></label><label>수신 휴대폰 번호<input id="alimTo" type="tel" placeholder="010-0000-0000"></label><div id="alimVars" class="form-grid"></div><div class="inline mt"><button id="alimPreview">발송 내용 검증</button>${config.sendEnabled&&session.role==='owner'?'<button id="alimSend" class="ghost">테스트 발송</button>':''}</div><pre id="alimResult" class="notice" style="white-space:pre-wrap"></pre></div><div class="card"><h3>추가 등록된 알림톡 템플릿</h3><p class="muted">템플릿 ID는 서버에 등록되어 있습니다. SOLAPI 승인 문구와 변수 검증 전까지 발송되지 않습니다.</p><div class="list">${(config.additionalTemplates||[]).map(x=>`<div class="list-item split"><span>${esc(x.name)}</span><span class="tag ${x.configured&&x.reviewStatus==='검수완료'?'good':'warn'}">${x.configured?'서버 등록 · '+(x.reviewStatus||'검수상태 미확인')+' · 변수 확인 전':'미등록'}</span></div>`).join('')||'<p class="muted">추가 등록된 템플릿이 없습니다.</p>'}</div></div><div class="card"><h3>최근 발송 기록</h3><div id="alimLogs">불러오는 중…</div></div>`;
- function updateFields(){const fields=config.kinds[$('#alimKind').value]?.variables||[];$('#alimVars').innerHTML=fields.map(x=>`<label>${esc(x)}<input data-alim-field="${esc(x)}" type="${['사용일','변경사용일','지급예정일'].includes(x)?'date':'text'}" placeholder="${esc(x)}"></label>`).join('');$('#alimResult').textContent='';}
+ <div class="card"><p class="notice">회원의 거래 고객 알림톡은 회원이 직접 견적·계약·대금 화면에서 발송합니다. 이 화면은 템플릿 변수 검증과 등록된 테스트번호 발송만을 위한 관리자 도구입니다.</p><label>템플릿 선택 (전체 ${templateChoices.length}개)<select id="alimKind"><optgroup label="검수완료 · ${templateChoices.filter(x=>x.reviewStatus==='검수완료').length}개">${optionHtml('검수완료')}</optgroup><optgroup label="검수진행중 · ${templateChoices.filter(x=>x.reviewStatus==='검수진행중').length}개">${optionHtml('검수진행중')}</optgroup></select></label><p id="alimSelectionStatus" class="notice"></p><label id="alimRecipientWrap">수신 휴대폰 번호<input id="alimTo" type="tel" placeholder="010-0000-0000"></label><div id="alimVars" class="form-grid"></div><div class="inline mt"><button id="alimPreview">발송 내용 검증</button>${config.sendEnabled&&session.role==='owner'?'<button id="alimSend" class="ghost">테스트 발송</button>':''}</div><pre id="alimResult" class="notice" style="white-space:pre-wrap"></pre></div><div class="card"><h3>추가 등록된 알림톡 템플릿</h3><p class="muted">템플릿 ID는 서버에 등록되어 있습니다. SOLAPI 승인 문구와 변수 검증 전까지 발송되지 않습니다.</p><div class="list">${(config.additionalTemplates||[]).map(x=>`<div class="list-item split"><span>${esc(x.name)}</span><span class="tag ${x.configured&&x.reviewStatus==='검수완료'?'good':'warn'}">${x.configured?'서버 등록 · '+(x.reviewStatus||'검수상태 미확인')+' · 변수 확인 전':'미등록'}</span></div>`).join('')||'<p class="muted">추가 등록된 템플릿이 없습니다.</p>'}</div></div><div class="card"><h3>최근 발송 기록</h3><div id="alimLogs">불러오는 중…</div></div>`;
+ function updateFields(){
+  const selected=templateChoices.find(x=>x.key===$('#alimKind').value);
+  const ready=!!(selected?.previewSupported&&selected.configured&&selected.reviewStatus==='검수완료');
+  $('#alimRecipientWrap').hidden=!ready;
+  $('#alimTo').disabled=!ready;
+  $('#alimPreview').disabled=!ready;
+  const sendButton=$('#alimSend');if(sendButton)sendButton.disabled=!ready;
+  $('#alimSelectionStatus').textContent=!selected?'템플릿을 선택해 주세요.':selected.reviewStatus==='검수진행중'?
+   '검수진행중인 템플릿입니다. 승인 및 변수 확인 전까지 미리보기·발송을 사용할 수 없습니다.':
+   !selected.configured?'서버 템플릿 ID 등록이 필요합니다.':
+   ready?'템플릿 ID 등록 완료 · 입력값 형식 검증 가능 (SOLAPI 승인 본문과 변수 일치 여부는 별도 확인 필요)':
+   '검수완료 · 서버 ID 등록 완료. SOLAPI 승인 본문의 변수명이 확인되지 않아 발송 내용 검증과 실제 발송은 비활성화되어 있습니다.';
+  $('#alimVars').innerHTML=ready?(selected.variables||[]).map(x=>`<label>${esc(x)}<input data-alim-field="${esc(x)}" type="${['사용일','변경사용일','지급예정일'].includes(x)?'date':'text'}" placeholder="${esc(x)}"></label>`).join(''):'';
+  $('#alimResult').textContent='';
+ }
  const payload=()=>({kind:$('#alimKind').value,to:$('#alimTo').value,variables:Object.fromEntries([...document.querySelectorAll('[data-alim-field]')].map(x=>[x.dataset.alimField,x.value.trim()]))});
- async function preview(){const p=payload(),r=await api('alimtalk/preview','POST',p);$('#alimResult').textContent='미리보기 검증 성공\n수신번호: '+r.maskedTo+'\n변수: '+JSON.stringify(r.variables,null,2);return p;}
+ async function preview(){const selected=templateChoices.find(x=>x.key===$('#alimKind').value);if(!selected?.previewSupported||!selected.configured||selected.reviewStatus!=='검수완료')throw Error('변수 확인 후 검증할 수 있는 템플릿입니다.');const p=payload(),r=await api('alimtalk/preview','POST',p);$('#alimResult').textContent='미리보기 검증 성공\n수신번호: '+r.maskedTo+'\n변수: '+JSON.stringify(r.variables,null,2);return p;}
  $('#alimKind').onchange=updateFields;updateFields();
  $('#alimPreview').onclick=safe(preview);
  const sendBtn=$('#alimSend');if(sendBtn)sendBtn.onclick=safe(async()=>{const p=await preview();if(!confirm('등록된 테스트 수신번호로 실제 유료 알림톡을 발송합니다. 계속할까요?'))return;const r=await api('alimtalk/send','POST',{...p,confirm:true,purpose:'test'});toast(r.accepted?'SOLAPI에서 접수했습니다. 최종 수신 상태는 SOLAPI에서 확인하세요.':'발송 실패');await loadLogs();});
