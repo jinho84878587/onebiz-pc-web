@@ -482,7 +482,7 @@ async function route(req,res){
   log(s.actor,'alimtalk.provider.read',String(items.length),{sendable:items.filter(x=>x.providerSendable).length});
   return json(res,200,{ok:true,checkedAt:Date.now(),sendableCount:items.filter(x=>x.providerSendable).length,items});
  }
- if(p==='/api/admin/alimtalk/templates'&&m==='GET'){mustAdmin(req);return json(res,200,{sendEnabled:env.SOLAPI_SEND_ENABLED==='true'&&templateInspector.health().access==='ok',sendConfigured:env.SOLAPI_SEND_ENABLED==='true',gateway:templateInspector.health(),memberEnabled:alimtalkSendingAllowed('user'),dispatchEnabled:alimtalkSendingAllowed('dispatch'),kinds:Object.fromEntries(Object.entries(alimtalkKinds).map(([k,v])=>[k,{configured:!!env[v.envKey],reviewStatus:'검수완료',variableVerification:'pending',variables:v.fields}])),templateSummary:{total:25,approved:25,underReview:0},additionalTemplates:alimtalkAdditionalRegistry.map(t=>({name:t.name,configured:!!env[t.envKey],reviewStatus:t.reviewStatus,paused:alimtalkPausedTemplateKeys.has(t.envKey),variableVerification:'pending',sendAvailable:false}))});}
+ if(p==='/api/admin/alimtalk/templates'&&m==='GET'){mustAdmin(req);return json(res,200,{sendEnabled:env.SOLAPI_SEND_ENABLED==='true'&&templateInspector.health().access==='ok',sendConfigured:env.SOLAPI_SEND_ENABLED==='true',gateway:templateInspector.health(),memberEnabled:alimtalkSendingAllowed('user'),dispatchEnabled:alimtalkSendingAllowed('dispatch'),kinds:Object.fromEntries(Object.entries(alimtalkKinds).map(([k,v])=>[k,{configured:!!env[v.envKey],reviewStatus:'검수완료',variableVerification:'pending',variables:v.fields}])),templateSummary:{total:25,approved:25,underReview:0},websignConfigured:!!env.HIWON_SIGN_APP_KEY,additionalTemplates:alimtalkAdditionalRegistry.map(t=>({name:t.name,configured:!!env[t.envKey],reviewStatus:t.reviewStatus,paused:alimtalkPausedTemplateKeys.has(t.envKey),variableVerification:'pending',sendAvailable:false}))});}
  if(p==='/api/admin/alimtalk/preview'&&m==='POST'){const s=mustAdmin(req,['owner','operator']);writeGuard(req,s);limit(req,'alimtalk-preview:'+s.actor,60,600000);const data=alimtalkPreview(await body(req));log(s.actor,'alimtalk.preview',data.kind,{templateId:data.templateId});return json(res,200,{ok:true,dryRun:true,kind:data.kind,templateId:data.templateId,maskedTo:data.to.slice(0,3)+'****'+data.to.slice(-4),variables:data.options.variables});}
  if(p==='/api/admin/alimtalk/send'&&m==='POST'){
   const s=mustAdmin(req,['owner']);writeGuard(req,s);limit(req,'alimtalk-send:'+s.actor,10,600000);check(env.SOLAPI_SEND_ENABLED==='true',503,'실제 알림톡 발송이 비활성화되어 있습니다. 검증 후 활성화하세요.');
@@ -555,6 +555,9 @@ server.requestTimeout=20000;server.headersTimeout=10000;
 const cleanup=setInterval(()=>{const now=Date.now();for(const table of ['sessions','otp','rates','oauth','devices','quote_links','contract_links','statement_links','receipt_links'])run(`DELETE FROM ${table} WHERE expires<?`,now-3600000);},600000);cleanup.unref();
 server.listen(port,host,()=>console.log(`ONEBIZ V2 ${mode} listening ${host}:${port}`));
 // Only safe boolean diagnostics: never log credential values or raw hashes.
+if(!local){
+ console.info('websign_proxy_ready',JSON.stringify({configured:!!env.HIWON_SIGN_APP_KEY}));
+}
 if(!local){
  console.info('solapi_auth_config_check',JSON.stringify({
   keyPresent:!!solapiCredential(env.SOLAPI_API_KEY),
