@@ -394,9 +394,16 @@ async function route(req,res){
   const s=mustAdmin(req,['owner']);writeGuard(req,s);limit(req,'alimtalk-send:'+s.actor,10,600000);check(env.SOLAPI_SEND_ENABLED==='true',503,'실제 알림톡 발송이 비활성화되어 있습니다. 검증 후 활성화하세요.');
   const b=await body(req);check(b.confirm===true&&b.purpose==='test',400,'테스트 발송 확인이 필요합니다.');
   check(env.SOLAPI_TEST_PHONE&&phone(b.to)===phone(env.SOLAPI_TEST_PHONE),403,'관리자 테스트는 등록된 테스트 번호로만 발송할 수 있습니다.');const data=alimtalkPreview(b),id=crypto.randomUUID(),masked=data.to.slice(0,3)+'****'+data.to.slice(-4);
-  let result;try{result=await sendAlimtalk(data);}catch(e){result={ok:false,status:0,result:{error:'SOLAPI 요청 실패'}};}
-  run('INSERT INTO alimtalk_logs(id,actor,kind,target_ref,phone_mask,template_id,status,response,created) VALUES(?,?,?,?,?,?,?,?,?)',id,s.actor,data.kind,'manual-test',masked,data.templateId,result.ok?'accepted':'failed',JSON.stringify(result.result).slice(0,4000),Date.now());
-  log(s.actor,'alimtalk.send.test',id,{kind:data.kind,accepted:result.ok});return json(res,result.ok?200:502,{ok:result.ok,requestId:id,accepted:result.ok,providerStatus:result.status});
+  let result,rejectedReason='';
+  try{result=await sendAlimtalk(data);}
+  catch(e){rejectedReason=e.status?text(e.message,180):'SOLAPI 외부 발송 서비스 연결 오류';result={ok:false,status:e.status||0,result:{}};}
+  const failed=result.result?.failedMessageList?.[0];
+  const failureCode=text(failed?.statusCode||result.result?.errorCode||'',30);
+  const safeLog={httpStatus:result.status,failedCode:failureCode,groupId:text(result.result?.groupInfo?.groupId,120),accepted:result.ok};
+  run('INSERT INTO alimtalk_logs(id,actor,kind,target_ref,phone_mask,template_id,status,response,created) VALUES(?,?,?,?,?,?,?,?,?)',id,s.actor,data.kind,'manual-test',masked,data.templateId,result.ok?'accepted':'failed',JSON.stringify(safeLog),Date.now());
+  log(s.actor,'alimtalk.send.test',id,{kind:data.kind,accepted:result.ok,httpStatus:result.status});
+  const error=result.ok?undefined:(rejectedReason||('SOLAPI 접수 거부 · HTTP '+(result.status||'연결 오류')+(failureCode?' · 상태코드 '+failureCode:'')));
+  return json(res,result.ok?200:502,{ok:result.ok,error,requestId:id,accepted:result.ok,providerStatus:result.status});
  }
  if(p==='/api/admin/alimtalk/logs'&&m==='GET'){mustAdmin(req,['owner','operator']);return json(res,200,{items:all('SELECT id,kind,phone_mask,template_id,status,created FROM alimtalk_logs ORDER BY created DESC LIMIT 100')});}
  if(p==='/api/admin/dashboard'&&m==='GET'){const s=mustAdmin(req);return json(res,200,{users:one('SELECT COUNT(*) n FROM users').n,incomplete:one('SELECT COUNT(*) n FROM users WHERE complete=0').n,pending:one("SELECT COUNT(*) n FROM dispatch WHERE status='접수대기'").n,activeNotices:one('SELECT COUNT(*) n FROM notices WHERE active=1 AND starts<=? AND ends>?',Date.now(),Date.now()).n,counts:all('SELECT counts FROM snapshots').reduce((acc,r)=>{for(const [k,v]of Object.entries(JSON.parse(r.counts)))acc[k]=(acc[k]||0)+v;return acc;},{}),mode,features:{push:false,billing:false,documentOriginalAccess:false}});}
