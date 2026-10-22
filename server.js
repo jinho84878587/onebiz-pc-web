@@ -398,7 +398,7 @@ if(!local&&env.SOLAPI_API_KEY&&env.SOLAPI_API_SECRET){
    const stats={registered:items.filter(x=>x.registered).length,sendable:items.filter(x=>x.providerSendable).length,matches:items.filter(x=>x.variableMatch==='match').length,mismatches:items.filter(x=>x.variableMatch==='mismatch').length};
    console.info('solapi_readonly_check_summary',JSON.stringify(stats));
    for(const t of items)console.info('solapi_readonly_template',JSON.stringify({kind:t.kind,sendable:t.providerSendable,match:t.variableMatch,variables:t.variables}));
-  }catch(e){console.warn('solapi_readonly_check_failed',e.status||'external_api');}
+  }catch(e){console.warn('solapi_readonly_check_failed',String(e.message||'external_api').slice(0,180));}
  },1000).unref();
 }
 process.on('SIGTERM',()=>server.close(()=>{store.db.close();process.exit(0);}));
