@@ -75,7 +75,7 @@ function alimtalkPreview(input){
  const to=String(input.to||'').replace(/[^0-9]/g,'');check(/^01[016789][0-9]{7,8}$/.test(to),400,'수신번호를 확인해 주세요.');
  const vars={};for(const key of type.fields){const value=text((input.variables||{})[key],500);check(value,400,key+' 값을 입력해 주세요.');if(['사용일','변경사용일','지급예정일'].includes(key)){check(/^\d{4}-\d{2}-\d{2}$/.test(value)&&!Number.isNaN(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value,400,key+'은 YYYY-MM-DD 날짜 형식으로 입력해 주세요.');}vars['#{'+key+'}']=value;}
  const opts={pfId:env.SOLAPI_PFID,templateId,disableSms:true,variables:vars};
- if(kind==='contractSign'){const url='https://'+vars['#{서명링크}'].replace(/^https?:\/\//,'');check(/^https:\/\/[-a-z0-9.]+\/[a-zA-Z0-9_/?=&%-]+$/i.test(url)&&new URL(url).hostname.endsWith('.onrender.com'),400,'서명 링크가 올바르지 않습니다.');opts.variables['#{서명링크}']=url.slice(8);}
+ if(kind==='contractSign'){const url='https://'+vars['#{서명링크}'].replace(/^https?:\/\//,'');check(/^https:\/\/[-a-z0-9.]+\/[a-zA-Z0-9_/?=&%-]+$/i.test(url)&&new URL(url).hostname==='hiwon-websign-server.onrender.com',400,'서명 링크가 올바르지 않습니다.');opts.variables['#{서명링크}']=url.slice(8);}
  return {kind,to,templateId,options:opts};
 }
 async function sendAlimtalk(msg){
@@ -123,8 +123,10 @@ function userAlimtalkRequest(actor,input){
  const variables={'고객명':customer,'업체명':supplier};
  if(kind==='contractSign'){
   check(contract.signed!==true,400,'이미 체결된 계약서입니다.');
-  const signUrl=text(contract.signUrl,500);
-  check(signUrl,400,'이 계약서의 전자서명 링크를 먼저 생성·동기화해 주세요.');
+  const signUrl=text(input.signUrl||contract.signUrl,500);
+  check(signUrl,400,'이 계약서의 전자서명 링크를 먼저 생성해 주세요.');
+  let signLink;try{signLink=new URL(signUrl);}catch{throw new HttpError(400,'전자서명 주소를 확인해 주세요.');}
+  check(signLink.protocol==='https:'&&signLink.hostname==='hiwon-websign-server.onrender.com'&&!signLink.username&&!signLink.password&&!signLink.hash&&signLink.pathname.length>1,400,'원비즈에서 연결된 전자서명 주소만 사용할 수 있습니다.');
   variables['계약금액']=Math.round(Number(contract.amount)||0).toLocaleString('ko-KR');
   variables['서명링크']=signUrl;
  }else{
