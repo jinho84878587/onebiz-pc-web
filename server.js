@@ -142,11 +142,12 @@ function userContractForSign(actor,contractId){
  phone(contract.phone);
  return contract;
 }
-function savedSignLink(actor,contractId){
- const row=one('SELECT provider_id,sign_url FROM websign_links WHERE user_id=? AND contract_id=?',actor,contractId);
+function savedSignLink(actor,contractId,contract=null){
+ const row=one('SELECT provider_id,sign_url,payload_hash FROM websign_links WHERE user_id=? AND contract_id=?',actor,contractId);
  if(!row)return null;
- const signUrl=websign.verifyUrl(open(row.sign_url));
- return {providerId:row.provider_id,signUrl};
+ const current=contract||userContractForSign(actor,contractId);
+ if(row.payload_hash!==websign.fingerprint(current,actor))return null;
+ return {providerId:row.provider_id,signUrl:websign.verifyUrl(open(row.sign_url))};
 }
 function userAlimtalkRequest(actor,input){
  const kind=text(input.kind,40),contractId=text(input.contractId,100);
@@ -164,7 +165,7 @@ function userAlimtalkRequest(actor,input){
  const variables={'고객명':customer,'업체명':supplier};
  if(kind==='contractSign'){
   check(contract.signed!==true,400,'이미 체결된 계약서입니다.');
-  const signUrl=savedSignLink(actor,contractId)?.signUrl;
+  const signUrl=savedSignLink(actor,contractId,contract)?.signUrl;
   check(signUrl,400,'원비즈 서버에서 서명 링크를 먼저 생성해 주세요.');
   variables['계약금액']=Math.round(Number(contract.amount)||0).toLocaleString('ko-KR');
   variables['서명링크']=signUrl;
@@ -382,13 +383,13 @@ async function route(req,res){
   check(contractId,400,'계약서 번호를 확인해 주세요.');
   const contract=userContractForSign(session.actor,contractId);
   check(!!env.HIWON_SIGN_APP_KEY,503,'전자서명 서버 연결키가 설정되지 않았습니다. 원비즈 Render 서버 환경변수 HIWON_SIGN_APP_KEY를 등록해 주세요.');
-  let link=savedSignLink(session.actor,contractId);
+  let link=savedSignLink(session.actor,contractId,contract);
   if(!link){
     let created;
     try{created=await websign.createLink(contract,session.actor,env.HIWON_SIGN_APP_KEY);}
     catch(e){throw new HttpError(502,'전자서명 서버 연결 실패'+(e.status?' (HTTP '+e.status+')':''));}
-    run('INSERT OR IGNORE INTO websign_links(user_id,contract_id,provider_id,sign_url,created) VALUES(?,?,?,?,?)',session.actor,contractId,created.providerId,seal(created.signUrl),Date.now());
-    link=savedSignLink(session.actor,contractId);
+    run('INSERT OR REPLACE INTO websign_links(user_id,contract_id,provider_id,sign_url,payload_hash,created) VALUES(?,?,?,?,?,?)',session.actor,contractId,created.providerId,seal(created.signUrl),created.fingerprint,Date.now());
+    link=savedSignLink(session.actor,contractId,contract);
   }
   log(session.actor,'contract.websign.link',contractId,{created:!!link});
   return json(res,200,{ok:true,contractId,signUrl:link.signUrl});
@@ -399,7 +400,7 @@ async function route(req,res){
   const data=await body(req),contractId=text(data.contractId,100);
   check(contractId,400,'계약서 번호가 필요합니다.');
   const contract=userContractForSign(session.actor,contractId);
-  const link=savedSignLink(session.actor,contractId);
+  const link=savedSignLink(session.actor,contractId,contract);
   if(!link)return json(res,200,{ok:true,exists:false,signed:false});
   check(env.HIWON_SIGN_APP_KEY,503,'전자서명 서버 연결키가 설정되지 않았습니다.');
   let status;
