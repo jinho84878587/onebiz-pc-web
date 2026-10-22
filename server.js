@@ -524,6 +524,14 @@ if(!local&&env.SOLAPI_API_KEY&&env.SOLAPI_API_SECRET){
     ...alimtalkAdditionalRegistry.map(t=>({...t,kind:t.envKey,fields:null}))
    ];
    const items=templateInspector.inspect(registry,sendable,env);
+   const quoteApproved=sendable.find(t=>t.templateId===env.SOLAPI_TEMPLATE_QUOTE);
+   const quoteButtons=Array.isArray(quoteApproved?.buttons)?quoteApproved.buttons:[];
+   console.info('solapi_quote_link_check',JSON.stringify({
+    templateFound:!!quoteApproved,buttons:quoteButtons.length,
+    buttonTokenMatch:quoteButtons.some(b=>String(b.linkMo||b.linkPc||'').includes('#{문서토큰}')),
+    buttonQuotePathMatch:quoteButtons.some(b=>String(b.linkMo||b.linkPc||'').includes('/quote/'))
+   }));
+
    const stats={registered:items.filter(x=>x.registered).length,sendable:items.filter(x=>x.providerSendable).length,matches:items.filter(x=>x.variableMatch==='match').length,mismatches:items.filter(x=>x.variableMatch==='mismatch').length};
    console.info('solapi_readonly_check_summary',JSON.stringify(stats));
    const linkedIds=Object.values(alimtalkKinds).map(t=>env[t.envKey]).filter(Boolean);
