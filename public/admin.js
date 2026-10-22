@@ -25,7 +25,12 @@ async function alimtalk(){
  const optionHtml=(status)=>templateChoices.filter(x=>x.reviewStatus===status).map(x=>`<option value="${esc(x.key)}">${esc(x.name)} · ${esc(x.reviewStatus)}${x.paused?' · 발송중단':''}${x.configured?'':' (서버 미등록)'}${x.previewSupported?'':' · 변수 확인 전'}</option>`).join('');
 
  $('#page').innerHTML=`<div class="section-head"><div><h3>관리자용 알림톡 템플릿 검증</h3><p class="muted">총 ${config.templateSummary?.total||25}개 · 검수완료 ${config.templateSummary?.approved??23}개 · 검수진행중 ${config.templateSummary?.underReview??2}개</p></div><span class="tag">${config.sendEnabled?'SOLAPI 조회 정상 · 테스트 발송 준비':config.sendConfigured?'발송 설정 적용 · SOLAPI 접근 제한 ('+(config.gateway?.httpStatus||'미확인')+')':'미리보기 전용 · 실제 발송 잠금'}</span></div>
- <div class="card"><p class="notice">회원의 거래 고객 알림톡은 회원이 직접 견적·계약·대금 화면에서 발송합니다. 이 화면은 템플릿 변수 검증과 등록된 테스트번호 발송만을 위한 관리자 도구입니다. SOLAPI 접근 상태가 정상이 아니면 발송이 실행되지 않습니다.</p><label>템플릿 선택 (전체 ${templateChoices.length}개)<select id="alimKind"><optgroup label="검수완료 · ${templateChoices.filter(x=>x.reviewStatus==='검수완료').length}개">${optionHtml('검수완료')}</optgroup><optgroup label="검수진행중 · ${templateChoices.filter(x=>x.reviewStatus==='검수진행중').length}개">${optionHtml('검수진행중')}</optgroup></select></label><p id="alimSelectionStatus" class="notice"></p><label id="alimRecipientWrap">수신 휴대폰 번호<input id="alimTo" type="tel" placeholder="010-0000-0000"></label><div id="alimVars" class="form-grid"></div><div class="inline mt"><button id="alimPreview">발송 내용 검증</button>${config.sendEnabled&&session.role==='owner'?'<button id="alimSend" class="ghost">테스트 발송</button>':''}</div><pre id="alimResult" class="notice" style="white-space:pre-wrap"></pre></div><div class="card"><div class="section-head"><div><h3>SOLAPI 승인 문구 및 변수 확인</h3><p class="muted">SOLAPI 발송 가능 템플릿을 읽기 전용으로 조회합니다. 실제 메시지는 발송하지 않습니다.</p></div><button class="light" id="providerInspect">SOLAPI 승인정보 조회</button></div><p id="providerSummary" class="notice">선택한 템플릿의 실제 문구와 변수를 확인하려면 조회 버튼을 누르세요.</p><div id="providerDetails"></div></div><div class="card"><h3>추가 등록된 알림톡 템플릿</h3><p class="muted">템플릿 ID는 서버에 등록되어 있습니다. SOLAPI 승인 문구와 변수 검증 전까지 발송되지 않습니다.</p><div class="list">${(config.additionalTemplates||[]).map(x=>`<div class="list-item split"><span>${esc(x.name)}</span><span class="tag ${x.configured&&x.reviewStatus==='검수완료'&&!x.paused?'good':'warn'}">${x.configured?'서버 등록 · '+(x.reviewStatus||'검수상태 미확인')+(x.paused?' · 발송중단':' · 변수 확인 전'):'미등록'}</span></div>`).join('')||'<p class="muted">추가 등록된 템플릿이 없습니다.</p>'}</div></div><div class="card"><h3>최근 발송 기록</h3><div id="alimLogs">불러오는 중…</div></div>`;
+ <div class="card"><p class="notice">회원의 거래 고객 알림톡은 회원이 직접 견적·계약·대금 화면에서 발송합니다. 이 화면은 템플릿 변수 검증과 등록된 테스트번호 발송만을 위한 관리자 도구입니다. SOLAPI 접근 상태가 정상이 아니면 발송이 실행되지 않습니다.</p><label>템플릿 선택 (전체 ${templateChoices.length}개)<select id="alimKind"><optgroup label="검수완료 · ${templateChoices.filter(x=>x.reviewStatus==='검수완료').length}개">${optionHtml('검수완료')}</optgroup><optgroup label="검수진행중 · ${templateChoices.filter(x=>x.reviewStatus==='검수진행중').length}개">${optionHtml('검수진행중')}</optgroup></select></label><p id="alimSelectionStatus" class="notice"></p><label id="alimRecipientWrap">수신 휴대폰 번호<input id="alimTo" type="tel" placeholder="010-0000-0000"></label><div id="alimVars" class="form-grid"></div><div class="inline mt"><button id="alimPreview">발송 내용 검증</button>${config.sendEnabled&&session.role==='owner'?'<button id="alimSend" class="ghost">테스트 발송</button>':''}</div><pre id="alimResult" class="notice" style="white-space:pre-wrap"></pre>
+ <div id="alimConfirmBox" class="notice" hidden>
+  <p id="alimConfirmText">실제 발송을 진행하려면 수신번호를 다시 확인해 주세요.</p>
+  <div class="inline mt"><button id="alimConfirmSend">확인 후 실제 발송</button><button id="alimCancelSend" class="ghost">취소</button></div>
+ </div>
+ <pre id="alimSendResult" class="notice" style="white-space:pre-wrap" role="status" aria-live="polite">발송 기록이 없습니다. 내용을 검증한 뒤 테스트 발송을 선택해 주세요.</pre></div><div class="card"><div class="section-head"><div><h3>SOLAPI 승인 문구 및 변수 확인</h3><p class="muted">SOLAPI 발송 가능 템플릿을 읽기 전용으로 조회합니다. 실제 메시지는 발송하지 않습니다.</p></div><button class="light" id="providerInspect">SOLAPI 승인정보 조회</button></div><p id="providerSummary" class="notice">선택한 템플릿의 실제 문구와 변수를 확인하려면 조회 버튼을 누르세요.</p><div id="providerDetails"></div></div><div class="card"><h3>추가 등록된 알림톡 템플릿</h3><p class="muted">템플릿 ID는 서버에 등록되어 있습니다. SOLAPI 승인 문구와 변수 검증 전까지 발송되지 않습니다.</p><div class="list">${(config.additionalTemplates||[]).map(x=>`<div class="list-item split"><span>${esc(x.name)}</span><span class="tag ${x.configured&&x.reviewStatus==='검수완료'&&!x.paused?'good':'warn'}">${x.configured?'서버 등록 · '+(x.reviewStatus||'검수상태 미확인')+(x.paused?' · 발송중단':' · 변수 확인 전'):'미등록'}</span></div>`).join('')||'<p class="muted">추가 등록된 템플릿이 없습니다.</p>'}</div></div><div class="card"><h3>최근 발송 기록</h3><div id="alimLogs">불러오는 중…</div></div>`;
  function showProviderDetails(){
   const selected=templateChoices.find(x=>x.key===$('#alimKind').value);
   const record=providerInspection?.items?.find(x=>x.kind===selected?.key||x.name===selected?.name);
@@ -63,6 +68,7 @@ async function alimtalk(){
    '검수완료 · 서버 ID 등록 완료. SOLAPI 승인 본문의 변수명이 확인되지 않아 발송 내용 검증과 실제 발송은 비활성화되어 있습니다.';
   $('#alimVars').innerHTML=ready?(selected.variables||[]).map(x=>`<label>${esc(x)}<input data-alim-field="${esc(x)}" type="${['사용일','변경사용일','지급예정일'].includes(x)?'date':'text'}" placeholder="${esc(x)}"></label>`).join(''):'';
   $('#alimResult').textContent='';
+  $('#alimConfirmBox').hidden=true;
   showProviderDetails();
  }
  const payload=()=>({kind:$('#alimKind').value,to:$('#alimTo').value,variables:Object.fromEntries([...document.querySelectorAll('[data-alim-field]')].map(x=>[x.dataset.alimField,x.value.trim()]))});
@@ -70,7 +76,40 @@ async function alimtalk(){
  $('#alimKind').onchange=updateFields;updateFields();
  $('#alimPreview').onclick=safe(preview);
  $('#providerInspect').onclick=()=>fetchProviderTemplates();
- const sendBtn=$('#alimSend');if(sendBtn)sendBtn.onclick=safe(async()=>{const p=await preview();if(!confirm('등록된 테스트 수신번호로 실제 유료 알림톡을 발송합니다. 계속할까요?'))return;const r=await api('alimtalk/send','POST',{...p,confirm:true,purpose:'test'});toast(r.accepted?'SOLAPI에서 접수했습니다. 최종 수신 상태는 SOLAPI에서 확인하세요.':'발송 실패');await loadLogs();});
+ let pendingTest=null;
+ const sendStatus=$('#alimSendResult'),confirmBox=$('#alimConfirmBox'),finalSend=$('#alimConfirmSend');
+ const sendBtn=$('#alimSend');
+ if(sendBtn)sendBtn.onclick=async()=>{
+  confirmBox.hidden=true;pendingTest=null;
+  try{
+   const p=await preview();
+   pendingTest=p;
+   const recipient=String(p.to||'').replace(/\\D/g,'');
+   $('#alimConfirmText').textContent='발송 대상: '+recipient.slice(0,3)+'-****-'+recipient.slice(-4)+'. 실제 카카오 알림톡 발송으로 요금이 발생할 수 있습니다. 내용과 번호가 맞으면 아래 확인 버튼을 누르세요.';
+   sendStatus.textContent='발송 준비가 완료됐습니다. 아래 최종 발송 버튼을 누르기 전에는 메시지가 전송되지 않습니다.';
+   confirmBox.hidden=false;
+  }catch(e){sendStatus.textContent='검증 실패: '+e.message;}
+ };
+ $('#alimCancelSend').onclick=()=>{confirmBox.hidden=true;pendingTest=null;sendStatus.textContent='테스트 발송을 취소했습니다. 알림톡이 전송되지 않았습니다.';};
+ finalSend.onclick=async()=>{
+  if(!pendingTest){sendStatus.textContent='미리보기 검증부터 진행해 주세요.';return;}
+  const data=pendingTest;pendingTest=null;
+  finalSend.disabled=true;sendBtn.disabled=true;$('#alimCancelSend').disabled=true;
+  sendStatus.textContent='SOLAPI로 테스트 발송을 요청하고 있습니다…';
+  try{
+   const r=await api('alimtalk/send','POST',{...data,confirm:true,purpose:'test'});
+   sendStatus.textContent=r.accepted?'SOLAPI 접수 성공 · 요청 ID: '+r.requestId+'. 실제 카카오톡 수신 여부는 휴대폰과 SOLAPI 발송내역에서 확인해 주세요.':'SOLAPI 접수 실패 · HTTP '+(r.providerStatus||'미확인');
+   await loadLogs();
+  }catch(e){
+   sendStatus.textContent='테스트 발송 실패 · 원인: '+e.message+(e.status?' (HTTP '+e.status+')':'')+'. 실제 수신 및 발송내역을 확인한 후 다시 시도해 주세요.';
+   try{await loadLogs();}catch{}
+  }finally{
+   confirmBox.hidden=true;finalSend.disabled=false;$('#alimCancelSend').disabled=false;
+   const selected=templateChoices.find(x=>x.key===$('#alimKind').value);
+   sendBtn.disabled=!(selected?.previewSupported&&selected.configured&&selected.reviewStatus==='검수완료');
+  }
+ };
+
  async function loadLogs(){const r=await api('alimtalk/logs');$('#alimLogs').innerHTML=`<div class="table-container"><table><thead><tr><th>시간</th><th>유형</th><th>수신번호</th><th>상태</th></tr></thead><tbody>${r.items.map(x=>`<tr><td>${when(x.created)}</td><td>${esc(labels[x.kind]||x.kind)}</td><td>${esc(x.phone_mask)}</td><td>${esc(x.status)}</td></tr>`).join('')||'<tr><td colspan="4">발송 기록이 없습니다.</td></tr>'}</tbody></table></div>`;}
  await loadLogs();
 }
