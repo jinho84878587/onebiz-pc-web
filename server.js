@@ -330,6 +330,9 @@ async function route(req,res){
   const supplier=profile?open(profile.profile):{};
   check(text(supplier.businessName||supplier.representative,120),400,'발신 업체 정보를 등록해 주세요.');
   check(!!env.SOLAPI_TEMPLATE_CONTRACT_SIGN,503,'계약서 서명 요청 템플릿이 등록되지 않았습니다.');
+  if(templateInspector.health().access!=='ok'&&Date.now()-templateInspector.health().checkedAt>300000){
+    try{await templateInspector.sendable(alimtalkAuth);}catch{}
+  }
   const access=templateInspector.health().access,enabled=alimtalkSendingAllowed('user')&&access==='ok';
   const reason=!alimtalkSendingAllowed('user')?'알림톡 발송 설정이 꺼져 있습니다.':
    access!=='ok'?'SOLAPI 승인 템플릿 조회에 실패하고 있습니다. 실제 알림톡은 전송되지 않으며, 카카오톡 공유 버튼으로 링크를 전송할 수 있습니다.':'';
