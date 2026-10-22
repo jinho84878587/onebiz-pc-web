@@ -65,7 +65,8 @@ const alimtalkKinds={
 };
 
 const alimtalkAdditionalRegistry=[{"name":"견적 유효기간 만료 안내","envKey":"SOLAPI_TEMPLATE_QUOTE_EXPIRED","reviewStatus":"검수완료"},{"name":"계약서 서명 재안내","envKey":"SOLAPI_TEMPLATE_CONTRACT_SIGN_REMINDER","reviewStatus":"검수완료"},{"name":"중도금 지급일 안내","envKey":"SOLAPI_TEMPLATE_MIDDLE_DUE","reviewStatus":"검수완료"},{"name":"계약금 지급일 안내","envKey":"SOLAPI_TEMPLATE_DEPOSIT_DUE","reviewStatus":"검수완료"},{"name":"잔금 지급일 안내","envKey":"SOLAPI_TEMPLATE_BALANCE_DUE","reviewStatus":"검수완료"},{"name":"시공 당일 안내","envKey":"SOLAPI_TEMPLATE_WORK_TODAY","reviewStatus":"검수완료"},{"name":"시공 전날 안내","envKey":"SOLAPI_TEMPLATE_WORK_TOMORROW","reviewStatus":"검수완료"},{"name":"미수금 재안내","envKey":"SOLAPI_TEMPLATE_RECEIVABLE_REMINDER","reviewStatus":"검수완료"},{"name":"완납 안내","envKey":"SOLAPI_TEMPLATE_FULL_PAYMENT","reviewStatus":"검수완료"},{"name":"입금 확인 안내","envKey":"SOLAPI_TEMPLATE_PAYMENT_CONFIRMED","reviewStatus":"검수완료"},{"name":"일정 취소 안내","envKey":"SOLAPI_TEMPLATE_SCHEDULE_CANCEL","reviewStatus":"검수완료"},{"name":"일정 변경 안내","envKey":"SOLAPI_TEMPLATE_SCHEDULE_CHANGE","reviewStatus":"검수완료"},{"name":"일정 안내","envKey":"SOLAPI_TEMPLATE_SCHEDULE_NOTICE","reviewStatus":"검수완료"},{"name":"전자서명 완료 안내","envKey":"SOLAPI_TEMPLATE_ESIGN_DONE","reviewStatus":"검수완료"},{"name":"계약 체결 완료","envKey":"SOLAPI_TEMPLATE_CONTRACT_DONE","reviewStatus":"검수완료"},{"name":"간이영수증 발행 안내","envKey":"SOLAPI_TEMPLATE_RECEIPT","reviewStatus":"검수진행중"},{"name":"거래명세서 발행 안내","envKey":"SOLAPI_TEMPLATE_STATEMENT","reviewStatus":"검수진행중"},{"name":"견적서 재안내","envKey":"SOLAPI_TEMPLATE_QUOTE_REMINDER","reviewStatus":"검수진행중"},{"name":"견적서 발송 안내","envKey":"SOLAPI_TEMPLATE_QUOTE","reviewStatus":"검수진행중"}];
-function alimtalkAuth(){const date=new Date().toISOString(),salt=crypto.randomBytes(16).toString('hex'),sig=crypto.createHmac('sha256',env.SOLAPI_API_SECRET).update(date+salt).digest('hex');return 'HMAC-SHA256 apiKey='+env.SOLAPI_API_KEY+', date='+date+', salt='+salt+', signature='+sig;}
+function solapiCredential(v){return String(v||'').trim().replace(/^['\"]|['\"]$/g,'').trim();}
+function alimtalkAuth(){const date=new Date().toISOString(),salt=crypto.randomBytes(16).toString('hex'),key=solapiCredential(env.SOLAPI_API_KEY),secret=solapiCredential(env.SOLAPI_API_SECRET),sig=crypto.createHmac('sha256',secret).update(date+salt).digest('hex');return 'HMAC-SHA256 apiKey='+key+', date='+date+', salt='+salt+', signature='+sig;}
 function alimtalkPreview(input){
  const kind=text(input.kind,40),type=alimtalkKinds[kind];check(type,400,'지원되지 않는 알림톡 종류입니다.');
  const templateId=env[type.envKey];check(templateId&&env.SOLAPI_PFID,503,'템플릿 또는 채널 설정이 완료되지 않았습니다.');
@@ -385,6 +386,15 @@ const server=http.createServer((req,res)=>route(req,res).catch(e=>{if(!res.heade
 server.requestTimeout=20000;server.headersTimeout=10000;
 const cleanup=setInterval(()=>{const now=Date.now();for(const table of ['sessions','otp','rates','oauth','devices','quote_links','contract_links','statement_links','receipt_links'])run(`DELETE FROM ${table} WHERE expires<?`,now-3600000);},600000);cleanup.unref();
 server.listen(port,host,()=>console.log(`ONEBIZ V2 ${mode} listening ${host}:${port}`));
+// Only safe boolean diagnostics: never log credential values or raw hashes.
+if(!local){
+ console.info('solapi_auth_config_check',JSON.stringify({
+  keyPresent:!!solapiCredential(env.SOLAPI_API_KEY),
+  secretPresent:!!solapiCredential(env.SOLAPI_API_SECRET),
+  keyWhitespace:!!env.SOLAPI_API_KEY&&String(env.SOLAPI_API_KEY)!==solapiCredential(env.SOLAPI_API_KEY),
+  secretWhitespace:!!env.SOLAPI_API_SECRET&&String(env.SOLAPI_API_SECRET)!==solapiCredential(env.SOLAPI_API_SECRET)
+ }));
+}
 // Read-only deployment sanity check. No recipients, API secrets, or message contents in logs.
 if(!local&&env.SOLAPI_API_KEY&&env.SOLAPI_API_SECRET){
  setTimeout(async()=>{
