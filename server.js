@@ -4,6 +4,7 @@ const {createStore}=require('./lib/store');
 const {HttpError,check,random,equal,sha,phone,text,passwordHash,totp}=require('./lib/security');
 const provider=require('./lib/providers');
 const templateInspector=require('./lib/solapi-template-inspector');
+const websign=require('./lib/websign-bridge');
 const env=process.env,mode=env.APP_MODE||'production',demo=mode==='demo',test=mode==='test',local=demo||test;
 check(['production','demo','test'].includes(mode),500,'Invalid APP_MODE');
 const host=local?'127.0.0.1':'0.0.0.0';const port=Number(env.PORT||10000);
@@ -131,6 +132,22 @@ function memberQuoteSendInfo(actor,quoteId){
  check(expires>Date.now(),400,'견적 유효기간이 지났습니다. 견적서를 수정해 주세요.');
  return {q,to,customer,supplier,finalAmount:Math.round(finalAmount),expires};
 }
+function userContractForSign(actor,contractId){
+ const row=one('SELECT body FROM snapshots WHERE user_id=?',actor);
+ check(row,404,'계약서를 원비즈 계정에 동기화한 후 다시 시도해 주세요.');
+ const contract=(open(row.body).data?.contracts||[]).find(c=>String(c.id)===String(contractId));
+ check(contract,404,'내 계약 목록에 해당 계약서가 없습니다.');
+ check(contract.signed!==true,400,'이미 체결 완료된 계약서입니다.');
+ check(text(contract.customer,80),400,'계약 고객명을 확인해 주세요.');
+ phone(contract.phone);
+ return contract;
+}
+function savedSignLink(actor,contractId){
+ const row=one('SELECT provider_id,sign_url FROM websign_links WHERE user_id=? AND contract_id=?',actor,contractId);
+ if(!row)return null;
+ const signUrl=websign.verifyUrl(open(row.sign_url));
+ return {providerId:row.provider_id,signUrl};
+}
 function userAlimtalkRequest(actor,input){
  const kind=text(input.kind,40),contractId=text(input.contractId,100);
  check(['contractSign','receivable'].includes(kind),400,'회원이 직접 발송할 수 있는 안내를 선택해 주세요.');
@@ -147,10 +164,8 @@ function userAlimtalkRequest(actor,input){
  const variables={'고객명':customer,'업체명':supplier};
  if(kind==='contractSign'){
   check(contract.signed!==true,400,'이미 체결된 계약서입니다.');
-  const signUrl=text(input.signUrl||contract.signUrl,500);
-  check(signUrl,400,'이 계약서의 전자서명 링크를 먼저 생성해 주세요.');
-  let signLink;try{signLink=new URL(signUrl);}catch{throw new HttpError(400,'전자서명 주소를 확인해 주세요.');}
-  check(signLink.protocol==='https:'&&signLink.hostname==='hiwon-websign-server.onrender.com'&&!signLink.username&&!signLink.password&&!signLink.hash&&signLink.pathname.length>1,400,'원비즈에서 연결된 전자서명 주소만 사용할 수 있습니다.');
+  const signUrl=savedSignLink(actor,contractId)?.signUrl;
+  check(signUrl,400,'원비즈 서버에서 서명 링크를 먼저 생성해 주세요.');
   variables['계약금액']=Math.round(Number(contract.amount)||0).toLocaleString('ko-KR');
   variables['서명링크']=signUrl;
  }else{
@@ -360,6 +375,38 @@ async function route(req,res){
   return json(res,result.ok?200:502,{ok:result.ok,accepted:result.ok,requestId:id,
    ...(result.ok?{notice:'SOLAPI 접수 성공입니다. 실제 수신 완료 여부는 발송내역에서 확인해 주세요.'}:{error:'SOLAPI 발송 요청이 실패했습니다. 실제 수신 여부와 발송내역을 확인해 주세요.'})});
  }
+ if(p==='/api/contract/sign-link'&&m==='POST'){
+  const session=getSession(req);writeGuard(req,session);
+  limit(req,'websign-create:'+session.actor,6,600000);
+  const data=await body(req),contractId=text(data.contractId,100);
+  check(contractId,400,'계약서 번호를 확인해 주세요.');
+  const contract=userContractForSign(session.actor,contractId);
+  check(!!env.HIWON_SIGN_APP_KEY,503,'전자서명 서버 연결키가 설정되지 않았습니다. 원비즈 Render 서버 환경변수 HIWON_SIGN_APP_KEY를 등록해 주세요.');
+  let link=savedSignLink(session.actor,contractId);
+  if(!link){
+    let created;
+    try{created=await websign.createLink(contract,session.actor,env.HIWON_SIGN_APP_KEY);}
+    catch(e){throw new HttpError(502,'전자서명 서버 연결 실패'+(e.status?' (HTTP '+e.status+')':''));}
+    run('INSERT OR IGNORE INTO websign_links(user_id,contract_id,provider_id,sign_url,created) VALUES(?,?,?,?,?)',session.actor,contractId,created.providerId,seal(created.signUrl),Date.now());
+    link=savedSignLink(session.actor,contractId);
+  }
+  log(session.actor,'contract.websign.link',contractId,{created:!!link});
+  return json(res,200,{ok:true,contractId,signUrl:link.signUrl});
+ }
+ if(p==='/api/contract/sign-status'&&m==='POST'){
+  const session=getSession(req);writeGuard(req,session);
+  limit(req,'websign-status:'+session.actor,120,600000);
+  const data=await body(req),contractId=text(data.contractId,100);
+  check(contractId,400,'계약서 번호가 필요합니다.');
+  const contract=userContractForSign(session.actor,contractId);
+  const link=savedSignLink(session.actor,contractId);
+  if(!link)return json(res,200,{ok:true,exists:false,signed:false});
+  check(env.HIWON_SIGN_APP_KEY,503,'전자서명 서버 연결키가 설정되지 않았습니다.');
+  let status;
+  try{status=await websign.status(link.providerId,env.HIWON_SIGN_APP_KEY);}
+  catch(e){throw new HttpError(502,'전자서명 상태를 조회할 수 없습니다.');}
+  return json(res,200,{ok:true,exists:true,...status});
+ }
  if(p==='/api/alimtalk/customer/contract/preflight'&&m==='POST'){
   const session=getSession(req);writeGuard(req,session);limit(req,'alimtalk-sign-preflight:'+session.actor,25,600000);
   const request=await body(req),contractId=text(request.contractId,100);
@@ -378,8 +425,9 @@ async function route(req,res){
   if(templateInspector.health().access!=='ok'&&Date.now()-templateInspector.health().checkedAt>300000){
     try{await templateInspector.sendable(alimtalkAuth);}catch{}
   }
-  const access=templateInspector.health().access,enabled=alimtalkSendingAllowed('user')&&access==='ok';
-  const reason=!alimtalkSendingAllowed('user')?'알림톡 발송 설정이 꺼져 있습니다.':
+  const signConfigured=!!env.HIWON_SIGN_APP_KEY;
+  const access=templateInspector.health().access,enabled=signConfigured&&alimtalkSendingAllowed('user')&&access==='ok';
+  const reason=!signConfigured?'전자서명 서버 연결키가 원비즈 서버에 없습니다. Render의 HIWON_SIGN_APP_KEY를 확인해 주세요.':!alimtalkSendingAllowed('user')?'알림톡 발송 설정이 꺼져 있습니다.':
    access!=='ok'?'SOLAPI 승인 템플릿 조회에 실패하고 있습니다. 실제 알림톡은 전송되지 않으며, 카카오톡 공유 버튼으로 링크를 전송할 수 있습니다.':'';
   log(session.actor,'alimtalk.contract.preflight',contractId,{ready:enabled});
   return json(res,200,{ok:true,dryRun:true,kind:'contractSign',contractId,customer:contract.customer,
