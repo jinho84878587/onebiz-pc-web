@@ -77,6 +77,12 @@ function alimtalkPreview(input){
 }
 async function sendAlimtalk(msg){
  check(env.SOLAPI_API_KEY&&env.SOLAPI_API_SECRET&&env.SOLAPI_PFID,503,'SOLAPI 인증이 설정되지 않았습니다.');
+ const approved=await templateInspector.sendable(alimtalkAuth);
+ const template=approved.find(t=>t.templateId===msg?.options?.templateId);
+ check(template,403,'SOLAPI에서 발송 가능한 승인 템플릿이 아닙니다.');
+ const actualNames=templateInspector.inspect([{kind:'send',name:'send',envKey:'SOLAPI_RUNTIME_TEMPLATE',fields:null,reviewStatus:'검수완료'}],[template],{SOLAPI_RUNTIME_TEMPLATE:msg.options.templateId})[0].variables;
+ const requestedNames=Object.keys(msg.options.variables||{}).map(k=>k.replace(/^#\{/,'').replace(/\}$/,'')).sort((a,b)=>a.localeCompare(b,'ko'));
+ check(actualNames.length===requestedNames.length&&actualNames.every((x,i)=>x===requestedNames[i]),403,'승인 템플릿 변수명과 원비즈 전송 변수가 일치하지 않습니다.');
  const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),15000);
  try{const r=await fetch('https://api.solapi.com/messages/v4/send-many/detail',{method:'POST',headers:{'Content-Type':'application/json',Authorization:alimtalkAuth()},body:JSON.stringify({messages:[{to:msg.to,kakaoOptions:msg.options}]}),signal:ctrl.signal});const result=await r.json();return {ok:r.ok,status:r.status,result};}
  finally{clearTimeout(timer);}
