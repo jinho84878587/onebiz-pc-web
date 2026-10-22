@@ -84,7 +84,7 @@ async function alimtalk(){
   try{
    const p=await preview();
    pendingTest=p;
-   const recipient=String(p.to||'').replace(/\\D/g,'');
+   const recipient=String(p.to||'').replace(/\D/g,'');
    $('#alimConfirmText').textContent='발송 대상: '+recipient.slice(0,3)+'-****-'+recipient.slice(-4)+'. 실제 카카오 알림톡 발송으로 요금이 발생할 수 있습니다. 내용과 번호가 맞으면 아래 확인 버튼을 누르세요.';
    sendStatus.textContent='발송 준비가 완료됐습니다. 아래 최종 발송 버튼을 누르기 전에는 메시지가 전송되지 않습니다.';
    confirmBox.hidden=false;
