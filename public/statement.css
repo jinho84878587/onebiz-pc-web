@@ -53,6 +53,10 @@
  html,body{width:100%;background:white!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
  .wrap{width:100%;padding:0}.sheet{width:100%;max-width:none;box-shadow:none;border:0}
  .document-head{padding-left:12mm;padding-right:12mm}.doc-body{padding-left:12mm;padding-right:12mm}
- .parties,.settlement,.totals,.confirmations,.ledger,.legal{break-inside:avoid}
+ .parties,.settlement,.totals,.confirmations,.legal{break-inside:avoid}
+ .sheet{overflow:visible}.ledger{break-inside:auto}.ledger thead{display:table-header-group}.ledger tr{break-inside:avoid;page-break-inside:avoid}
  .ledger th,.party h3,.document-head,.totals .grand{-webkit-print-color-adjust:exact;print-color-adjust:exact}
 }
+
+.ledger tr.adjustment{background:var(--statement-soft)}
+.archive-notice{border:1px solid #b58b42;background:#fff8e9;color:#6c4d13;padding:12px;line-height:1.7;break-inside:avoid}

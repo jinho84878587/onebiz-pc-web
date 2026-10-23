@@ -36,6 +36,7 @@ function render(data){
    <h1>간 이 영 수 증</h1><small>SIMPLE RECEIPT</small>
   </div>
   <div class="doc-body">
+   ${data.archive?.notice?`<p class="archive-notice">${esc(data.archive.notice)}</p>`:''}
    <div class="receipt-meta"><span><b>영수증 번호</b>${esc(r.id||'-')}</span><span><b>발행일</b>${esc(r.issuedAt||'-')}</span></div>
    <div class="to-customer"><b>받는 분</b><strong>${esc(r.customer||'-')} 귀하</strong></div>
    <div class="received-highlight"><div>영수금액</div><div class="amount-line"><strong>일금 ${esc(koreanReceiptAmount(paid))}정</strong><b>${money(paid)}</b></div><p>상기 금액을 아래 거래내역과 같이 정히 영수하였습니다.</p></div>
@@ -44,7 +45,7 @@ function render(data){
     <tbody><tr><td>${esc(r.issuedAt||'-')}</td><td class="item-name">${esc(item)}</td><td>—</td><td class="num">1</td><td class="num">${money(paid)}</td><td class="num emphasis">${money(paid)}</td></tr></tbody>
    </table></div>
    <div class="payment-info">
-    <div class="method-note"><div><b>결제방법</b><span>□ 현금　□ 계좌이체　□ 카드</span></div><div><b>비고</b><span>${r.vatIncluded===false?'부가세 별도': '영수금액 기준'}</span></div></div>
+    <div class="method-note"><div><b>결제방법</b><span>□ 현금　□ 계좌이체　□ 카드</span></div><div><b>비고</b><span>${r.vatIncluded===false?'부가세 미포함': '영수금액 기준'}</span></div></div>
     <div class="money-calc"><div><span>공급가액</span><b>${money(supply)}</b></div><div><span>부가가치세</span><b>${money(vat)}</b></div><div class="total"><span>합계금액</span><strong>${money(paid)}</strong></div></div>
    </div>
    <h2 class="section-caption">공급자 정보</h2>

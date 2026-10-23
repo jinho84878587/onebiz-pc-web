@@ -1,7 +1,7 @@
 'use strict';
 const $=s=>document.querySelector(s);
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
-const number=v=>new Intl.NumberFormat('ko-KR').format(Math.round(Number(v)||0));
+const number=(v,digits=2)=>new Intl.NumberFormat('ko-KR',{maximumFractionDigits:digits}).format(Number(v)||0);
 const pad=v=>String(v).padStart(2,'0');
 const dateOnly=value=>{
  if(!value)return '-';
@@ -29,7 +29,7 @@ function render(data){
    <td class="item-name">${esc(item.name||'-')}${item.spec?`<small>규격: ${esc(item.spec)}</small>`:''}</td>
    <td class="center">${number(item.qty)}</td>
    <td class="num">${number(item.unitPrice)}</td>
-   <td class="num">${number(item.amount)}</td>
+   <td class="num">${number(item.amount,4)}</td>
   </tr>`).join('');
  $('#status').classList.add('hidden');
  const root=$('#quote');root.classList.remove('hidden');
@@ -61,6 +61,7 @@ function render(data){
    ${q.vatEnabled===false?'<div class="vat-separate">부가세 별도</div>':''}
   </div>
   <div class="document-end">
+   <p>수량·단가의 소수 입력값을 반영하며, 최종 정산 금액은 원 단위로 반올림합니다.</p>
    <p class="validity ${expired?'is-expired':''}">견적 유효기간: ${esc(q.validUntilDate||dateOnly(q.validUntil))}${expired?' (만료)':''}</p>
    ${q.note?`<p class="special-note">특이사항: ${esc(q.note)}</p>`:''}
   </div>

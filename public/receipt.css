@@ -66,3 +66,5 @@
  .receipt-document,.receipt-items th,.signature,.received-highlight,.money-calc .total{-webkit-print-color-adjust:exact;print-color-adjust:exact}
  .receipt-meta,.to-customer,.received-highlight,.payment-info,.supplier-grid,.signature{break-inside:avoid}
 }
+
+.archive-notice{border:1px solid #b58b42;background:#fff8e9;color:#6c4d13;padding:12px;line-height:1.7;break-inside:avoid}
