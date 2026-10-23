@@ -41,3 +41,12 @@ test('완료 안내는 승인된 원본 버튼과 정확한 변수만 사용한�
  assert.throws(()=>originals.message(info,{...template,buttons:[{linkMo:'https://evil.example/contract/#{계약서토큰}'}]},'a'.repeat(43),origin));
  assert.throws(()=>originals.message(info,{...template,content:template.content+' #{미등록변수}'},'a'.repeat(43),origin));
 });
+test('서명 이미지를 별도 보관하면 서명 서버 자료가 없어져도 원본을 유지한다',t=>{
+ const {s,c}=fixture(t),png='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9Z9SAAAAAASUVORK5CYII=';
+ const status={signed:true,signedAt:c.signedAt,signatureName:c.customer,identityStatus:'전화번호 확인 완료'};
+ originals.archive(s,'u',c,status,png);const stored=s.one('SELECT body FROM websign_archives').body;assert.ok(!stored.includes('data:image'));
+ originals.archive(s,'u',c,status,png);assert.equal(s.one('SELECT count(*) n FROM websign_archives').n,1);
+ s.run('DELETE FROM websign_links');s.run('UPDATE users SET profile=?',s.seal({businessName:'나중에 변경한 업체'}));
+ const info=originals.source(s,'u',c.id);assert.equal(info.originalUrl,'');assert.equal(info.supplier.businessName,'테스트 업체');assert.equal(info.contract.signatureDataUrl,png);
+ const link=originals.create(s,origin,info,now),view=originals.resolve(s,link.token,now+1);assert.equal(view.source,'websign-archive');assert.equal(view.contract.signatureDataUrl,png);
+});

@@ -193,11 +193,14 @@ function userContract(actor,contractId){
  return contract;
 }
 async function completedContractSource(actor,contractId){
- const info=contractOriginals.source(store,actor,contractId);
+ let info=contractOriginals.source(store,actor,contractId);
  if(info.providerId){
   check(env.HIWON_SIGN_APP_KEY,503,'전자서명 서버 연결키를 확인해 주세요.');
-  let status;try{status=await websign.status(info.providerId,env.HIWON_SIGN_APP_KEY);}catch{throw new HttpError(502,'서명 원본의 완료 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.');}
+  let status;try{status=await websign.status(info.providerId,env.HIWON_SIGN_APP_KEY);}catch(e){throw new HttpError(e.status===404?409:502,e.status===404?'서명 완료 기록은 있지만 전자서명 서버에서 원본을 찾을 수 없습니다. 저장한 원본 PDF가 있다면 복구가 필요합니다.':'서명 원본의 완료 상태를 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.');}
   check(status.signed,409,'전자서명 원본의 서명 완료를 먼저 확인해 주세요.');
+  let signature;try{signature=await websign.originalSignature(info.originalUrl);}catch{throw new HttpError(502,'서명 이미지가 포함된 원본을 보관할 수 없어 발송하지 않았습니다.');}
+  contractOriginals.archive(store,actor,userContract(actor,contractId),status,signature);
+  info=contractOriginals.source(store,actor,contractId);
  }
  return info;
 }
@@ -524,10 +527,16 @@ async function route(req,res){
   const contract=userContractForSign(session.actor,contractId);
   const link=savedSignLink(session.actor,contractId,contract);
   if(!link)return json(res,200,{ok:true,exists:false,signed:false});
+  const archived=contractOriginals.archived(store,session.actor,contractId,contract);
+  if(archived)return json(res,200,{ok:true,exists:true,signed:true,signatureName:archived.contract.signatureName,identityStatus:archived.contract.identityStatus,signedAt:archived.contract.signedAt});
   check(env.HIWON_SIGN_APP_KEY,503,'전자서명 서버 연결키가 설정되지 않았습니다.');
   let status;
   try{status=await websign.status(link.providerId,env.HIWON_SIGN_APP_KEY);}
   catch(e){throw new HttpError(502,'전자서명 상태를 조회할 수 없습니다.');}
+  if(status.signed){
+   let signature;try{signature=await websign.originalSignature(link.signUrl);}catch{throw new HttpError(502,'서명 원본을 보관할 수 없어 완료 반영을 보류했습니다. 잠시 후 다시 확인해 주세요.');}
+   contractOriginals.archive(store,session.actor,contract,status,signature);
+  }
   return json(res,200,{ok:true,exists:true,...status});
  }
  if(p==='/api/alimtalk/customer/document/preview'&&m==='POST'){
