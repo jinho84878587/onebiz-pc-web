@@ -184,11 +184,15 @@ function memberDocumentMessage(info,approved,token){
  return {kind,to:info.recipient,templateId:info.templateId,phoneMask:info.phoneMask,
   options:{pfId:env.SOLAPI_PFID,templateId:info.templateId,disableSms:true,variables}};
 }
-function userContractForSign(actor,contractId){
+function userContract(actor,contractId){
  const row=one('SELECT body FROM snapshots WHERE user_id=?',actor);
  check(row,404,'계약서를 원비즈 계정에 동기화한 후 다시 시도해 주세요.');
  const contract=(open(row.body).data?.contracts||[]).find(c=>String(c.id)===String(contractId));
  check(contract,404,'내 계약 목록에 해당 계약서가 없습니다.');
+ return contract;
+}
+function userContractForSign(actor,contractId){
+ const contract=userContract(actor,contractId);
  check(contract.signed!==true,400,'이미 체결 완료된 계약서입니다.');
  check(text(contract.customer,80),400,'계약 고객명을 확인해 주세요.');
  phone(contract.phone);
@@ -461,7 +465,16 @@ async function route(req,res){
   limit(req,'websign-create:'+session.actor,6,600000);
   const data=await body(req),contractId=text(data.contractId,100);
   check(contractId,400,'계약서 번호를 확인해 주세요.');
-  const contract=userContractForSign(session.actor,contractId);
+  const contract=userContract(session.actor,contractId);
+  if(contract.signed===true){
+   // Older Android versions use this route for both signing and completed sharing.
+   // Reuse only the matching original; never create another signing request.
+   const completed=savedSignLink(session.actor,contractId,contract);
+   check(completed,409,'체결된 계약서의 전자서명 원본 링크를 확인할 수 없습니다. 계약서 PDF 보내기를 이용해 주세요.');
+   log(session.actor,'contract.websign.view',contractId,{signed:true});
+   return json(res,200,{ok:true,contractId,signUrl:completed.signUrl,signed:true,purpose:'view'});
+  }
+  userContractForSign(session.actor,contractId);
   check(!!env.HIWON_SIGN_APP_KEY,503,'전자서명 서버 연결키가 설정되지 않았습니다. 원비즈 Render 서버 환경변수 HIWON_SIGN_APP_KEY를 등록해 주세요.');
   let link=savedSignLink(session.actor,contractId,contract);
   if(!link){
@@ -712,3 +725,4 @@ if(!local&&env.SOLAPI_API_KEY&&env.SOLAPI_API_SECRET){
  },1000).unref();
 }
 process.on('SIGTERM',()=>server.close(()=>{store.db.close();process.exit(0);}));
+

@@ -67,3 +67,26 @@ test('짧은 서명 링크는 로그인 없이 원본으로 이동하며 변경�
  s.run('UPDATE snapshots SET body=? WHERE user_id=?',s.seal({data:{contracts:[{...contract,amount:300000}]}}),user);
  const changed=await client.request(pathname);assert.equal(changed.status,410);assert.equal(changed.headers.get('location'),null);
 });
+test('체결 계약서 공유는 본인 소유의 일치하는 서명 원본만 재사용한다',async()=>{
+ const websign=require('../lib/websign-bridge'),owner=await signup('01000000031'),other=await signup('01000000032');
+ const contract={id:'C-COMPLETED-SHARE',customer:'가상 고객',phone:'01000000031',amount:250000,signed:true,signedAt:'2026-10-23T05:30:58.805Z',finalConfirmed:true};
+ const local={...contract,id:'C-LOCAL-SIGNED'},now=Date.now(),snapshot={data:{contracts:[contract,local]}};
+ const digest=websign.fingerprint(contract,owner.id),url=websign.BASE+'/sign/'+('z'.repeat(180));
+ s.run('INSERT INTO snapshots(user_id,revision,body,counts,updated) VALUES(?,?,?,?,?)',owner.id,1,s.seal(snapshot),'{}',now);
+ s.run('INSERT INTO websign_links(user_id,contract_id,provider_id,sign_url,payload_hash,created) VALUES(?,?,?,?,?,?)',owner.id,contract.id,websign.providerId(owner.id,contract.id,digest),s.seal(url),digest,now);
+ const before=s.one('SELECT * FROM websign_links WHERE user_id=? AND contract_id=?',owner.id,contract.id);
+ const response=await owner.request('/api/contract/sign-link','POST',{contractId:contract.id});
+ assert.equal(response.status,200,JSON.stringify(response.body));assert.deepEqual(response.body,{ok:true,contractId:contract.id,signUrl:url,signed:true,purpose:'view'});
+ assert.equal((await owner.request('/api/contract/sign-link','POST',{contractId:contract.id})).body.signUrl,url);
+ assert.deepEqual(s.one('SELECT * FROM websign_links WHERE user_id=? AND contract_id=?',owner.id,contract.id),before);
+ assert.deepEqual(s.open(s.one('SELECT body FROM snapshots WHERE user_id=?',owner.id).body),snapshot);
+ assert.equal((await other.request('/api/contract/sign-link','POST',{contractId:contract.id,userId:owner.id})).status,404);
+ assert.equal((await new Client().request('/api/contract/sign-link','POST',{contractId:contract.id})).status,401);
+ assert.equal((await owner.request('/api/contract/sign-link','POST',{contractId:local.id})).status,409);
+ assert.equal(s.one('SELECT COUNT(*) AS n FROM websign_links WHERE user_id=?',owner.id).n,1);
+ s.run('UPDATE snapshots SET body=? WHERE user_id=?',s.seal({data:{contracts:[{...contract,amount:300000}]}}),owner.id);
+ assert.equal((await owner.request('/api/contract/sign-link','POST',{contractId:contract.id})).status,409);
+ assert.equal((await owner.request('/api/contract/sign-status','POST',{contractId:contract.id})).status,400);
+ assert.deepEqual(s.one('SELECT * FROM websign_links WHERE user_id=? AND contract_id=?',owner.id,contract.id),before);
+});
+
