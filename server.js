@@ -576,6 +576,14 @@ if(!local&&env.SOLAPI_API_KEY&&env.SOLAPI_API_SECRET){
     ...alimtalkAdditionalRegistry.map(t=>({...t,kind:t.envKey,fields:null}))
    ];
    const items=templateInspector.inspect(registry,sendable,env);
+   for(const [category,key] of [['statement','SOLAPI_TEMPLATE_STATEMENT'],['receipt','SOLAPI_TEMPLATE_RECEIPT']]){
+     const template=sendable.find(t=>t.templateId===env[key]);
+     const meta=template?templateInspector.inspect([{kind:category,name:category,envKey:key,fields:null,reviewStatus:'검수완료'}],[template],env)[0]:null;
+     console.info('solapi_document_template_check',JSON.stringify({
+       category,available:!!template,fields:meta?.variables||[],
+       buttons:(meta?.buttons||[]).map(b=>({name:b.name,type:b.type,link:b.linkMo||b.linkPc||''}))
+     }));
+   }
    const quoteApproved=sendable.find(t=>t.templateId===env.SOLAPI_TEMPLATE_QUOTE);
    const quoteButtons=Array.isArray(quoteApproved?.buttons)?quoteApproved.buttons:[];
    console.info('solapi_quote_link_check',JSON.stringify({
