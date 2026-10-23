@@ -52,3 +52,18 @@ test('TOTP RFC6238 SHA1 8자리 벡터의 6자리 끝 값',()=>{assert.equal(tot
 test('production은 HTTPS·약관승인·암호화키 없으면 시작 거부',()=>{const r=cp.spawnSync(process.execPath,['server.js'],{cwd:path.join(__dirname,'..'),env:{...process.env,APP_MODE:'production',PUBLIC_ORIGIN:'http://localhost:19999',PORT:'19999',DATA_FILE:path.join(dir,'reject.sqlite')},timeout:5000});assert.notEqual(r.status,0);assert.ok(!fs.existsSync(path.join(dir,'reject.sqlite')));});
 test('관리자 TOTP 미입력 거부 / 정상 코드 승인 / 재사용 거부',async()=>{const secret='GEZDGNBVGY3TQOJQGEZDGNBVGY3TQOJQ';s.run('UPDATE admins SET totp=?,last_step=-1 WHERE id=?',s.seal(secret),'viewer');const c=new Client(),payload={username:'viewer',password:'Test-Only-Password-2026'};assert.equal((await c.request('/api/admin/login','POST',payload)).status,401);payload.code=totp(secret);assert.equal((await c.request('/api/admin/login','POST',payload)).status,200);assert.equal((await c.request('/api/admin/login','POST',payload)).status,401);});
 test('서버 소스·환경변수·DB 파일은 정적 경로로 노출되지 않음',async()=>{const c=new Client();for(const file of ['/server.js','/.env','/lib/store.js','/data/test.sqlite'])assert.equal((await c.request(file)).status,404);});
+test('짧은 서명 링크는 로그인 없이 원본으로 이동하며 변경된 계약은 차단한다',async()=>{
+ const websign=require('../lib/websign-bridge'),shortLinks=require('../lib/sign-short-links');
+ const user='short-link-http-member',now=Date.now(),contract={id:'C-HTTP-LINK',customer:'가상 고객',phone:'01000000000',amount:250000};
+ const digest=websign.fingerprint(contract,user),link={providerId:websign.providerId(user,contract.id,digest),signUrl:websign.BASE+'/sign/'+('x'.repeat(180))};
+ s.run('INSERT INTO users(id,profile,consent,created,last_login) VALUES(?,?,?,?,?)',user,s.seal({}),'{}',now,now);
+ s.run('INSERT INTO snapshots(user_id,revision,body,counts,updated) VALUES(?,?,?,?,?)',user,1,s.seal({data:{contracts:[contract]}}),'{}',now);
+ s.run('INSERT INTO websign_links(user_id,contract_id,provider_id,sign_url,payload_hash,created) VALUES(?,?,?,?,?,?)',user,contract.id,link.providerId,s.seal(link.signUrl),digest,now);
+ const short=shortLinks.create(s,origin,user,contract,link,now),pathname=new URL(short.url).pathname;
+ const client=new Client(),r=await client.request(pathname);
+ assert.equal(r.status,302);assert.equal(r.headers.get('location'),link.signUrl);assert.equal(r.headers.get('cache-control'),'no-store');assert.equal(r.headers.get('referrer-policy'),'no-referrer');assert.equal(r.headers.get('x-robots-tag'),'noindex, nofollow');
+ assert.equal((await client.request(pathname,'HEAD')).status,302);
+ assert.equal((await client.request(pathname,'POST',{})).status,405);
+ s.run('UPDATE snapshots SET body=? WHERE user_id=?',s.seal({data:{contracts:[{...contract,amount:300000}]}}),user);
+ const changed=await client.request(pathname);assert.equal(changed.status,410);assert.equal(changed.headers.get('location'),null);
+});

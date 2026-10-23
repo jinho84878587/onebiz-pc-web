@@ -5,6 +5,7 @@ const {HttpError,check,random,equal,sha,phone,text,passwordHash,totp}=require('.
 const provider=require('./lib/providers');
 const templateInspector=require('./lib/solapi-template-inspector');
 const websign=require('./lib/websign-bridge');
+const signShortLinks=require('./lib/sign-short-links');
 const env=process.env,mode=env.APP_MODE||'production',demo=mode==='demo',test=mode==='test',local=demo||test;
 check(['production','demo','test'].includes(mode),500,'Invalid APP_MODE');
 const host=local?'127.0.0.1':'0.0.0.0';const port=Number(env.PORT||10000);
@@ -76,7 +77,7 @@ function alimtalkPreview(input){
  const to=String(input.to||'').replace(/[^0-9]/g,'');check(/^01[016789][0-9]{7,8}$/.test(to),400,'수신번호를 확인해 주세요.');
  const vars={};for(const key of type.fields){const value=text((input.variables||{})[key],500);check(value,400,key+' 값을 입력해 주세요.');if(['사용일','변경사용일','지급예정일'].includes(key)){check(/^\d{4}-\d{2}-\d{2}$/.test(value)&&!Number.isNaN(Date.parse(value))&&new Date(value).toISOString().slice(0,10)===value,400,key+'은 YYYY-MM-DD 날짜 형식으로 입력해 주세요.');}vars['#{'+key+'}']=value;}
  const opts={pfId:env.SOLAPI_PFID,templateId,disableSms:true,variables:vars};
- if(kind==='contractSign'){const url='https://'+vars['#{서명링크}'].replace(/^https?:\/\//,'');check(/^https:\/\/[-a-z0-9.]+\/[a-zA-Z0-9_/?=&%-]+$/i.test(url)&&new URL(url).hostname==='hiwon-websign-server.onrender.com',400,'서명 링크가 올바르지 않습니다.');opts.variables['#{서명링크}']=url.slice(8);}
+ if(kind==='contractSign')opts.variables['#{서명링크}']=signShortLinks.variable(origin,vars['#{서명링크}']);
  return {kind,to,templateId,options:opts};
 }
 // The authoritative Kakao channel ID comes from the approved template itself.
@@ -212,10 +213,10 @@ function userAlimtalkRequest(actor,input){
  const variables={'고객명':customer,'업체명':supplier};
  if(kind==='contractSign'){
   check(contract.signed!==true,400,'이미 체결된 계약서입니다.');
-  const signUrl=savedSignLink(actor,contractId,contract)?.signUrl;
-  check(signUrl,400,'원비즈 서버에서 서명 링크를 먼저 생성해 주세요.');
+  const signLink=savedSignLink(actor,contractId,contract);
+  check(signLink,400,'원비즈 서버에서 서명 링크를 먼저 생성해 주세요.');
   variables['계약금액']=Math.round(Number(contract.amount)||0).toLocaleString('ko-KR');
-  variables['서명링크']=signUrl;
+  variables['서명링크']=signShortLinks.create(store,origin,actor,contract,signLink).url;
  }else{
   check(contract.signed===true,400,'계약 체결 확인 후 미수금을 안내할 수 있습니다.');
   const amount=Math.max(0,Math.round((Number(contract.amount)||0)-(Number(contract.paidAmount)||0)));
@@ -242,7 +243,7 @@ function dispatchAlimtalkPlan(dispatchRow,record,status,changed){
 }
 function alimtalkResultLog(actor,kind,targetRef,data,result,status){
  const id=crypto.randomUUID();
- const safe={httpStatus:result?.status||0,providerError:result?.ok?'':text(result?.result?.error||result?.result?.message||'',160)};
+ const safe={httpStatus:result?.status||0,...templateInspector.failureSummary(result)};
  run('INSERT INTO alimtalk_logs(id,actor,kind,target_ref,phone_mask,template_id,status,response,created) VALUES(?,?,?,?,?,?,?,?,?)',id,actor,kind,targetRef,data.phoneMask||phoneMask(data.to),data.templateId,status,JSON.stringify(safe),Date.now());
  return id;
 }
@@ -269,6 +270,12 @@ async function route(req,res){
  res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
  if(!local)res.setHeader('Strict-Transport-Security','max-age=31536000');
  if(p==='/health')return json(res,200,{ok:true,version:'2.0.0-dev.1',mode});
+ if(/^\/s\/[A-Za-z0-9_-]{43}$/.test(p)&&(m==='GET'||m==='HEAD')){
+  limit(req,'public-sign:'+ip(req),120,600000);
+  const target=signShortLinks.resolve(store,p.slice(3));
+  res.writeHead(302,{'Location':target,'Cache-Control':'no-store','X-Robots-Tag':'noindex, nofollow'});
+  return res.end();
+ }
  if(p==='/api/config'&&m==='GET')return json(res,200,{mode,providers:Object.fromEntries(['kakao','naver','google'].map(k=>[k,provider.configured(env,k)])),phoneEnabled:local||!!(env.NCP_SERVICE_ID&&env.NCP_ACCESS_KEY&&env.NCP_SECRET_KEY&&env.NCP_SENDER),policyVersion,nativeSync:'automatic-account-sync',push:false,payments:false,subscription:{billingConnected:false,plans:['free','pro'],featureGateReady:true}});
  if(p==='/api/auth/phone/request'&&m==='POST'){
   writeGuard(req);limit(req,'sms-ip:'+ip(req),20,3600000);const b=await body(req),number=phone(b.phone),c=consent(b);
@@ -536,10 +543,11 @@ async function route(req,res){
   const ref='contract:'+data.contractId;
   const last=one("SELECT created FROM alimtalk_logs WHERE actor=? AND kind=? AND target_ref=? AND status='accepted' ORDER BY created DESC LIMIT 1",s.actor,data.kind,ref);
   check(!last||Date.now()-last.created>=600000,429,'같은 계약에 대한 발송은 10분 후 다시 시도할 수 있습니다.');
-  let result;try{result=await sendAlimtalk(data);}catch{result={ok:false,status:0,result:{error:'외부 발송 서비스 연결 실패'}};}
+  let result;try{result=await sendAlimtalk(data);}catch(e){result={ok:false,status:e.status||0,result:{error:e.status?e.message:'외부 발송 서비스 연결 실패'}};}
   const id=alimtalkResultLog(s.actor,data.kind,ref,data,result,result.ok?'accepted':'failed');
   log(s.actor,'alimtalk.customer.send',ref,{kind:data.kind,accepted:result.ok});
-  return json(res,result.ok?200:502,{ok:result.ok,requestId:id,accepted:result.ok,notice:'SOLAPI 접수 결과이며 실제 수신 성공 여부는 발송내역 확인이 필요합니다.'});
+  const failure=templateInspector.failureSummary(result);
+  return json(res,result.ok?200:502,{ok:result.ok,requestId:id,accepted:result.ok,...(!result.ok?{error:'알림톡 접수 실패'+(failure.providerCode?' ('+failure.providerCode+')':'')+' · '+failure.providerError}:{}),notice:'SOLAPI 접수 결과이며 실제 수신 성공 여부는 발송내역 확인이 필요합니다.'});
  }
  if(p==='/api/alimtalk/customer/logs'&&m==='GET'){
   const s=getSession(req);
@@ -639,7 +647,7 @@ async function route(req,res){
 }
 const server=http.createServer((req,res)=>route(req,res).catch(e=>{if(!res.headersSent)json(res,e.status||500,{ok:false,error:e.status?e.message:'서버 처리 오류입니다. 데이터는 자동 초기화하지 않았습니다.'});else res.end();if(!e.status)console.error('server_error',e.name);}));
 server.requestTimeout=20000;server.headersTimeout=10000;
-const cleanup=setInterval(()=>{const now=Date.now();for(const table of ['sessions','otp','rates','oauth','devices','quote_links','contract_links','statement_links','receipt_links'])run(`DELETE FROM ${table} WHERE expires<?`,now-3600000);},600000);cleanup.unref();
+const cleanup=setInterval(()=>{const now=Date.now();for(const table of ['sessions','otp','rates','oauth','devices','quote_links','contract_links','statement_links','receipt_links','sign_redirect_links'])run(`DELETE FROM ${table} WHERE expires<?`,now-3600000);},600000);cleanup.unref();
 server.listen(port,host,()=>console.log(`ONEBIZ V2 ${mode} listening ${host}:${port}`));
 // Only safe boolean diagnostics: never log credential values or raw hashes.
 if(!local){
