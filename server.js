@@ -132,6 +132,53 @@ function memberQuoteSendInfo(actor,quoteId){
  check(expires>Date.now(),400,'견적 유효기간이 지났습니다. 견적서를 수정해 주세요.');
  return {q,to,customer,supplier,finalAmount:Math.round(finalAmount),expires};
 }
+function memberPaymentDocument(actor,contractId,kind){
+ check(['statement','receipt'].includes(kind),400,'지원하지 않는 증빙 발행 유형입니다.');
+ const r=one('SELECT body FROM snapshots WHERE user_id=?',actor);
+ check(r,404,'계약서를 원비즈 계정에 동기화한 뒤 다시 시도해 주세요.');
+ const data=open(r.body),contract=(data.data?.contracts||[]).find(c=>String(c.id)===contractId);
+ check(contract,404,'내 계약서에서 거래 증빙을 찾을 수 없습니다.');
+ check(contract.signed===true,400,'체결 완료된 계약서만 거래 증빙을 발행할 수 있습니다.');
+ const recipient=phone(contract.phone),customer=text(contract.customer,100);
+ check(customer,400,'계약서의 고객명을 확인해 주세요.');
+ const row=one('SELECT profile FROM users WHERE id=?',actor);
+ check(row,404,'회원정보를 찾을 수 없습니다.');
+ const profile=open(row.profile),supplier=text(profile.businessName||profile.representative,120);
+ check(supplier,400,'내 업체 정보를 먼저 등록해 주세요.');
+ const amount=kind==='receipt'?Math.round(Number(contract.paidAmount)||0):Math.round(Number(contract.amount)||0);
+ check(amount>0,400,kind==='receipt'?'입금 등록 후 간이영수증을 발행할 수 있습니다.':'거래금액을 확인해 주세요.');
+ const envKey=kind==='receipt'?'SOLAPI_TEMPLATE_RECEIPT':'SOLAPI_TEMPLATE_STATEMENT';
+ const registry=alimtalkAdditionalRegistry.find(x=>x.envKey===envKey);
+ check(registry?.reviewStatus==='검수완료'&&!alimtalkPausedTemplateKeys.has(envKey),503,'이 문서의 알림톡 템플릿을 사용할 수 없습니다.');
+ check(env[envKey],503,'문서 알림톡 템플릿 ID가 등록되지 않았습니다.');
+ return {contract,recipient,customer,supplier,amount,envKey,templateId:env[envKey],kind,phoneMask:phoneMask(recipient)};
+}
+function memberDocumentMessage(info,approved,token){
+ const kind=info.kind,path=kind==='receipt'?'receipt':'statement';
+ const buttons=Array.isArray(approved.buttons)?approved.buttons:[];
+ const linkUrls=buttons.flatMap(b=>[b.linkMo,b.linkPc].filter(Boolean).map(String));
+ const hasLink=linkUrls.some(link=>{
+  try{const url=new URL(link);return url.protocol==='https:'&&url.hostname==='onebiz-pc-web.onrender.com'&&url.pathname.startsWith('/'+path+'/')&&url.pathname.includes('#{');}
+  catch{return false;}
+ });
+ check(hasLink,503,'승인된 '+(kind==='receipt'?'간이영수증':'거래명세서')+' 버튼 링크가 원비즈 문서 경로와 일치하지 않아 발송을 중단했습니다.');
+ const names=templateInspector.inspect([{kind,name:kind,envKey:'DOC',fields:null,reviewStatus:'검수완료'}],[approved],{DOC:info.templateId})[0].variables;
+ const values={
+  고객명:info.customer,업체명:info.supplier,
+  거래금액:info.amount.toLocaleString('ko-KR'),결제금액:info.amount.toLocaleString('ko-KR'),
+  입금금액:info.amount.toLocaleString('ko-KR'),수령금액:info.amount.toLocaleString('ko-KR'),
+  금액:info.amount.toLocaleString('ko-KR'),
+  거래명세서토큰:token,간이영수증토큰:token,문서토큰:token,
+  발행일:new Date(Date.now()+9*3600000).toISOString().slice(0,10)
+ };
+ const expected=kind==='receipt'?['간이영수증토큰','문서토큰']:['거래명세서토큰','문서토큰'];
+ check(names.some(name=>expected.includes(name)),503,'승인 템플릿의 문서 확인 토큰 변수가 일치하지 않습니다.');
+ const unknown=names.filter(name=>!Object.prototype.hasOwnProperty.call(values,name));
+ check(unknown.length===0,503,'승인 템플릿에 연결되지 않은 변수가 있습니다: '+unknown.join(', '));
+ const variables=Object.fromEntries(names.map(name=>['#{'+name+'}',values[name]]));
+ return {kind,to:info.recipient,templateId:info.templateId,phoneMask:info.phoneMask,
+  options:{pfId:env.SOLAPI_PFID,templateId:info.templateId,disableSms:true,variables}};
+}
 function userContractForSign(actor,contractId){
  const row=one('SELECT body FROM snapshots WHERE user_id=?',actor);
  check(row,404,'계약서를 원비즈 계정에 동기화한 후 다시 시도해 주세요.');
@@ -407,6 +454,46 @@ async function route(req,res){
   try{status=await websign.status(link.providerId,env.HIWON_SIGN_APP_KEY);}
   catch(e){throw new HttpError(502,'전자서명 상태를 조회할 수 없습니다.');}
   return json(res,200,{ok:true,exists:true,...status});
+ }
+ if(p==='/api/alimtalk/customer/document/preview'&&m==='POST'){
+  const session=getSession(req);writeGuard(req,session);
+  limit(req,'document-preview:'+session.actor,30,600000);
+  const bodyData=await body(req),kind=text(bodyData.kind,30),contractId=text(bodyData.contractId,100);
+  check(contractId,400,'계약서 번호가 필요합니다.');
+  const info=memberPaymentDocument(session.actor,contractId,kind);
+  const approved=await templateInspector.sendable(alimtalkAuth),template=approved.find(x=>x.templateId===info.templateId);
+  check(template,503,'SOLAPI 발송 가능 템플릿이 확인되지 않습니다.');
+  const dummyToken='A'.repeat(43),message=memberDocumentMessage(info,template,dummyToken);
+  const enabled=alimtalkSendingAllowed('user');
+  log(session.actor,'alimtalk.document.preview',contractId,{kind,sendEnabled:enabled});
+  return json(res,200,{ok:true,dryRun:true,kind,contractId,customer:info.customer,maskedTo:info.phoneMask,
+    amount:info.amount,templateId:info.templateId,sendEnabled:enabled,
+    reason:enabled?'':'원비즈 회원 알림톡 발송 설정이 비활성화되어 있습니다.',
+    variables:message.options.variables});
+ }
+ if(p==='/api/alimtalk/customer/document/send'&&m==='POST'){
+  const session=getSession(req);writeGuard(req,session);
+  check(alimtalkSendingAllowed('user'),503,'회원 알림톡 발송 설정이 비활성화되어 있습니다.');
+  const b=await body(req),kind=text(b.kind,30),contractId=text(b.contractId,100);
+  check(b.confirm===true&&contractId,400,'발송 전 고객과 계약서 확인이 필요합니다.');
+  limit(req,'document-send-minute:'+session.actor,3,60000);
+  limit(req,'document-send-day:'+session.actor,30,86400000);
+  const info=memberPaymentDocument(session.actor,contractId,kind),ref=kind+':'+contractId;
+  const latest=one("SELECT created FROM alimtalk_logs WHERE actor=? AND kind=? AND target_ref=? AND status='accepted' ORDER BY created DESC LIMIT 1",session.actor,kind,ref);
+  check(!latest||Date.now()-latest.created>600000,429,'같은 문서의 재발송은 10분 후 다시 시도해 주세요.');
+  const available=await templateInspector.sendable(alimtalkAuth),template=available.find(x=>x.templateId===info.templateId);
+  check(template,503,'승인된 알림톡 템플릿이 발송 가능 목록에 없습니다.');
+  const docToken=random(),message=memberDocumentMessage(info,template,docToken);
+  let result;try{result=await sendAlimtalk(message);}catch(e){result={ok:false,status:e.status||0,result:{}};}
+  if(result.ok){
+   const table=kind==='receipt'?'receipt_links':'statement_links';
+   run('INSERT OR REPLACE INTO '+table+'(token_hash,user_id,contract_id,expires,created,last_view) VALUES(?,?,?,?,?,0)',
+     hash(docToken),session.actor,contractId,Date.now()+365*86400000,Date.now());
+  }
+  const requestId=alimtalkResultLog(session.actor,kind,ref,info,result,result.ok?'accepted':'failed');
+  log(session.actor,'alimtalk.document.send',contractId,{kind,accepted:result.ok});
+  return json(res,result.ok?200:502,{ok:result.ok,accepted:result.ok,requestId,
+    ...(result.ok?{notice:'SOLAPI 접수 성공. 실제 수신 여부는 발송내역에서 확인해 주세요.'}:{error:'SOLAPI 접수 실패. 고객에게 문서가 전송되지 않았을 수 있습니다.'})});
  }
  if(p==='/api/alimtalk/customer/contract/preflight'&&m==='POST'){
   const session=getSession(req);writeGuard(req,session);limit(req,'alimtalk-sign-preflight:'+session.actor,25,600000);
