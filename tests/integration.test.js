@@ -89,4 +89,21 @@ test('체결 계약서 공유는 본인 소유의 일치하는 서명 원본만 
  assert.equal((await owner.request('/api/contract/sign-status','POST',{contractId:contract.id})).status,400);
  assert.deepEqual(s.one('SELECT * FROM websign_links WHERE user_id=? AND contract_id=?',owner.id,contract.id),before);
 });
+test('체결 원본 확인 링크는 서명·계약조건을 보관하고 로그인 없이 확인된다',async()=>{
+ const owner=await signup('01000000041'),other=await signup('01000000042'),now=Date.now();
+ const c={id:'C-ONSITE-ORIGINAL',customer:'원본 고객',phone:'01000000041',amount:250000,signed:true,signatureMethod:'현장 직접 전자서명',signatureName:'원본 고객',signaturePath:'0,0;10,20',standardTerms:'보존할 계약조건',specialTerms:'보존할 특약',signedAt:'2026-10-23T05:30:58Z'};
+ s.run('INSERT INTO snapshots VALUES(?,?,?,?,?)',owner.id,1,s.seal({data:{contracts:[c]}}),'{}',now);
+ assert.equal((await new Client().request('/api/contract/original-link','POST',{contractId:c.id})).status,401);
+ assert.equal((await other.request('/api/contract/original-link','POST',{contractId:c.id,userId:owner.id})).status,404);
+ const made=await owner.request('/api/contract/original-link','POST',{contractId:c.id});assert.equal(made.status,200,JSON.stringify(made.body));
+ const pathname=new URL(made.body.url).pathname,token=pathname.split('/').pop(),client=new Client();
+ const page=await client.request(pathname);assert.equal(page.status,200);assert.equal(page.headers.get('cache-control'),'no-store');
+ const view=await client.request('/api/public/contract/'+token);assert.equal(view.status,200);assert.equal(view.body.contract.standardTerms,c.standardTerms);assert.equal(view.body.contract.specialTerms,c.specialTerms);assert.deepEqual(view.body.contract.signatureStrokes,[[[0,0],[10,20]]]);
+ s.run('UPDATE snapshots SET body=? WHERE user_id=?',s.seal({data:{contracts:[{...c,amount:1}]}}),owner.id);
+ assert.equal((await client.request('/api/public/contract/'+token)).body.contract.amount,250000);
+ s.run('UPDATE signed_contract_links SET expires=? WHERE token_hash=?',Date.now()-1,s.hash(token));
+ assert.equal((await client.request(pathname)).status,410);
+ assert.equal((await owner.request('/api/alimtalk/customer/contract/completed/send','POST',{contractId:c.id})).status,503);
+ assert.equal(s.one("SELECT COUNT(*) n FROM alimtalk_logs WHERE actor=? AND kind='contractDone'",owner.id).n,0);
+});
 
