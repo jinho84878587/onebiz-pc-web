@@ -149,15 +149,15 @@ function memberPaymentDocument(actor,quoteId,kind,receivedAmount){
 }
 function publicQuoteDocumentPayload(userId,quote,kind,received,created){
  const row=one('SELECT profile FROM users WHERE id=?',userId);check(row,404,'회원정보를 찾을 수 없습니다.');
- const p=open(row.profile),supplier={businessName:text(p.businessName||p.representative||'ONEBIZ',120),representative:text(p.representative,80),phone:text(p.phone,40),registrationNo:text(p.registrationNo,40),address:[p.address,p.addressDetail].filter(Boolean).join(' ')};
+ const p=open(row.profile),supplier={businessName:text(p.businessName||p.representative||'ONEBIZ',120),representative:text(p.representative,80),phone:text(p.phone,40),registrationNo:text(p.registrationNo,40),address:[p.address,p.addressDetail].filter(Boolean).join(' '),bankName:text(p.bankName,60),accountNumber:text(p.accountNumber,60),accountHolder:text(p.accountHolder,80)};
  const total=Math.round(quoteTotal(quote)),issuedAt=new Date(created+9*3600000).toISOString().slice(0,10);
  if(kind==='statement'){
   const items=(quote.items||[]).map(i=>({name:text(i.name,160),spec:text(i.spec,160),qty:Number(i.qty)||0,unitPrice:Number(i.unitPrice)||0,amount:(Number(i.qty)||0)*(Number(i.unitPrice)||0)}));
   const vat=quoteVat(quote);
-  return {supplier,statement:{id:'TS-'+text(quote.id,90),quoteId:text(quote.id,100),customer:text(quote.customer,100),issuedAt,siteAddress:[quote.siteAddress,quote.siteAddressDetail].filter(Boolean).join(' '),items,supply:total-vat,vat,total,paidAmount:0,receivable:0,source:'quote'}};
+  return {supplier,statement:{id:'TS-'+text(quote.id,90),quoteId:text(quote.id,100),customer:text(quote.customer,100),phone:text(quote.phone,40),issuedAt,siteAddress:[quote.siteAddress,quote.siteAddressDetail].filter(Boolean).join(' '),items,supply:total-vat,vat,total,paidAmount:0,receivable:0,source:'quote',vatIncluded:quote.vatEnabled!==false}};
  }
  check(received>0,404,'수령 금액을 확인할 수 없습니다.');
- return {supplier,receipt:{id:'RC-'+text(quote.id,90),quoteId:text(quote.id,100),customer:text(quote.customer,100),item:(quote.items||[]).map(i=>text(i.name,120)).filter(Boolean).join(', ').slice(0,260)||'견적 내역',issuedAt,siteAddress:[quote.siteAddress,quote.siteAddressDetail].filter(Boolean).join(' '),paidAmount:received,contractAmount:total,receivable:Math.max(0,total-received),source:'quote',paymentConfirmedBy:'issuer'}};
+ return {supplier,receipt:{id:'RC-'+text(quote.id,90),quoteId:text(quote.id,100),customer:text(quote.customer,100),phone:text(quote.phone,40),item:(quote.items||[]).map(i=>text(i.name,120)).filter(Boolean).join(', ').slice(0,260)||'견적 내역',issuedAt,siteAddress:[quote.siteAddress,quote.siteAddressDetail].filter(Boolean).join(' '),paidAmount:received,contractAmount:total,receivable:Math.max(0,total-received),source:'quote',paymentConfirmedBy:'issuer',vatIncluded:quote.vatEnabled!==false}};
 }
 function memberDocumentMessage(info,approved,token){
  const kind=info.kind,path=kind==='receipt'?'receipt':'statement';
