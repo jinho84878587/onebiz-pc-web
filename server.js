@@ -158,7 +158,7 @@ function memberDocumentMessage(info,approved,token){
  const buttons=Array.isArray(approved.buttons)?approved.buttons:[];
  const linkUrls=buttons.flatMap(b=>[b.linkMo,b.linkPc].filter(Boolean).map(String));
  const hasLink=linkUrls.some(link=>{
-  try{const url=new URL(link);return url.protocol==='https:'&&url.hostname==='onebiz-pc-web.onrender.com'&&url.pathname.startsWith('/'+path+'/')&&url.pathname.includes('#{');}
+  try{const url=new URL(link);return url.protocol==='https:'&&url.hostname==='onebiz-pc-web.onrender.com'&&url.pathname.startsWith('/'+path+'/')&&link.includes('/'+path+'/#{');}
   catch{return false;}
  });
  check(hasLink,503,'승인된 '+(kind==='receipt'?'간이영수증':'거래명세서')+' 버튼 링크가 원비즈 문서 경로와 일치하지 않아 발송을 중단했습니다.');
