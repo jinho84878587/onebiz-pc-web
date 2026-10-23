@@ -1,1 +1,58 @@
 *{box-sizing:border-box}html,body{margin:0;padding:0;background:#f4f7fb;color:#11233f;font-family:Arial,"Noto Sans KR",sans-serif}.wrap{max-width:980px;margin:0 auto;padding:18px}.top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}.brand{display:flex;align-items:center;gap:10px}.mark{display:grid;place-items:center;width:46px;height:46px;border-radius:14px;background:linear-gradient(145deg,#176eff,#174ccf);color:#fff;font-size:22px;font-weight:900}.brand strong{display:block;font-size:24px}.brand small{display:block;color:#66758d}.top-actions{display:flex;gap:8px}.top button,.actions button{border:0;border-radius:12px;background:#1769ff;color:#fff;padding:11px 15px;font-weight:800;cursor:pointer}.top button.ghost,.actions button.ghost{background:#fff;color:#24415f;border:1px solid #d9e1ec}.status{background:#fff;border:1px solid #e2e8f0;border-radius:18px;padding:32px;text-align:center;color:#66758d}.hidden{display:none}.sheet{background:#fff;border:1px solid #e1e7ef;border-radius:22px;overflow:hidden;box-shadow:0 10px 32px rgba(20,43,80,.08)}.hero{padding:28px 32px;background:linear-gradient(135deg,#edf5ff,#fbfdff);display:flex;justify-content:space-between;gap:20px;border-bottom:1px solid #e4ebf4}.hero h1{margin:0 0 8px;font-size:34px}.meta{color:#65748b;line-height:1.8}.badge{display:inline-block;background:#eaf3ff;color:#0a5ee8;border-radius:999px;padding:7px 11px;font-weight:900;margin-bottom:10px}.amount-box{text-align:right;min-width:220px}.amount-box span{display:block;color:#65748b}.amount-box strong{display:block;font-size:34px;color:#0a5ee8;margin-top:8px}.section{padding:24px 32px;border-bottom:1px solid #edf1f6}.section:last-child{border-bottom:0}.section h2{font-size:18px;margin:0 0 14px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 28px}.row{display:flex;gap:12px}.row b{min-width:92px;color:#475a72}.row span{word-break:break-word}.items{width:100%;border-collapse:collapse}.items th,.items td{padding:12px 10px;border-bottom:1px solid #edf1f6;text-align:left}.items th{font-size:13px;color:#65748b;background:#fafcff}.items td.num,.items th.num{text-align:right}.summary{margin-left:auto;max-width:390px;padding-top:14px}.summary div{display:flex;justify-content:space-between;padding:8px 0}.summary .grand{border-top:2px solid #dbe5f2;margin-top:6px;padding-top:12px;font-size:21px;font-weight:900;color:#0a5ee8}.payment{display:flex;justify-content:flex-end;gap:22px;margin-top:12px;color:#485b73}.footer-note{padding:18px 32px;background:#f8fafc;color:#6e7c90;font-size:13px}.actions{display:flex;gap:8px;justify-content:flex-end;padding:18px 32px}@media(max-width:680px){.wrap{padding:0}.top{padding:14px 14px 0;align-items:flex-start}.brand strong{font-size:20px}.mark{width:40px;height:40px}.top-actions{flex-direction:column}.top button{padding:9px 11px;font-size:12px}.sheet{border-radius:0;border-left:0;border-right:0;box-shadow:none}.hero{padding:24px 18px;display:block}.hero h1{font-size:30px}.amount-box{text-align:left;min-width:0;margin-top:18px}.section{padding:20px 18px}.grid{grid-template-columns:1fr}.items th,.items td{padding:10px 6px;font-size:12px}.footer-note,.actions{padding:16px 18px}}@media print{body{background:#fff}.wrap{max-width:none;padding:0}.top,.actions{display:none!important}.sheet{box-shadow:none;border:0;border-radius:0}.hero{background:#fff}.footer-note{background:#fff}}
+/* 거래명세서 전용 원본 양식 복구: 보라색 표형 A4. 견적서 CSS와 독립 */
+:root{--statement:#5b43d6;--statement-dark:#33248f;--statement-soft:#f1edff}
+.sheet{border-radius:4px;max-width:210mm;margin:auto;background:white}
+.document-head{border-top:11px solid var(--statement);padding:22px 30px 5px;text-align:center}
+.document-brand{text-align:left;color:var(--statement);font-size:13px;font-weight:900;letter-spacing:.04em}
+.document-brand span{margin-left:8px;font-size:11px}
+.document-head h1{font-size:29px;letter-spacing:.36em;margin:6px 0 4px;font-weight:900;color:#19171f}
+.subtitle{font-size:11px;color:#6e6876;margin:0 0 18px}
+.number-line{display:grid;grid-template-columns:1fr 1fr;border-top:1px solid #c7c3ce;border-left:1px solid #c7c3ce;text-align:left}
+.number-line>span{border-right:1px solid #c7c3ce;border-bottom:1px solid #c7c3ce;display:flex;min-height:35px;align-items:center;font-size:11px}
+.number-line b{padding:10px 8px;background:#f8f7fb;min-width:82px;font-size:10px;color:#5e5a67;margin-right:10px;border-right:1px solid #c7c3ce}
+.doc-body{padding:0 30px 22px;font-size:11px;color:#19171f}
+.section-caption{font-size:14px;font-weight:800;margin:24px 0 10px}
+.parties{display:grid;grid-template-columns:1fr 1fr}
+.party{min-width:0}
+.party h3{margin:0;background:var(--statement);text-align:center;color:white;padding:10px 5px;font-size:12px}
+.party:nth-child(2) h3{background:var(--statement-dark)}
+.detail-row{display:grid;grid-template-columns:96px minmax(0,1fr);min-height:29px}
+.detail-row .key,.detail-row .value{display:flex;align-items:center;border-left:1px solid #c7c3ce;border-bottom:1px solid #c7c3ce;padding:5px 7px;overflow-wrap:anywhere}
+.detail-row .key{font-size:10px;background:#f8f7fb;color:#6e6876;text-align:center}
+.detail-row .value{font-size:10px;border-right:1px solid #c7c3ce}
+.party:nth-child(1) .detail-row .value{border-right:0}
+.table-scroll{width:100%}
+.ledger{width:100%;border-collapse:collapse;table-layout:fixed;font-size:9px}
+.ledger th{background:var(--statement);color:white;font-weight:800;text-align:center;padding:11px 3px;border:1px solid #d6d1e5}
+.ledger td{padding:11px 3px;border:1px solid #d6d1e5;text-align:center;overflow-wrap:anywhere}
+.ledger td.item-name{text-align:left}
+.ledger td.num{text-align:right}
+.ledger td.emphasis{font-weight:800}
+.settlement{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin-top:14px}
+.bank-note{min-height:135px;padding:5px 0}
+.bank-note .section-caption{margin-top:7px}
+.bank-note p{margin:9px 0;color:#625c6a}
+.totals{border-top:1px solid #ddd8e9;border-left:1px solid #ddd8e9;align-self:start}
+.totals>div{display:flex;justify-content:space-between;gap:8px;padding:10px;border-right:1px solid #ddd8e9;border-bottom:1px solid #ddd8e9;font-size:11px}
+.totals .grand{background:var(--statement-soft);font-size:15px;color:var(--statement);font-weight:900}
+.confirmations{display:grid;grid-template-columns:1fr 1fr;margin:22px 0 36px}
+.confirm-title{background:#f8f7fb;border:1px solid #ddd8e9;text-align:center;padding:8px;font-weight:800;color:#6e6876}
+.confirm-box{min-height:75px;border:1px solid #ddd8e9;border-top:0;padding:14px;position:relative;display:flex;align-items:center;justify-content:space-between;gap:8px}
+.stamp{width:55px;height:55px;flex:none;border:2px solid #d4574d;color:#d4574d;border-radius:50%;display:grid;place-content:center;text-align:center;font-weight:800;font-size:9px;line-height:1.5;transform:rotate(-9deg)}
+.legal{border-top:2px solid var(--statement);padding:13px 0;font-size:10px;color:#736d7d;display:flex;justify-content:space-between;gap:12px}
+.legal small{color:var(--statement);white-space:nowrap}
+@media(max-width:680px){
+ .sheet{border-radius:0}.document-head{padding:18px 12px 5px}.document-head h1{font-size:22px;letter-spacing:.2em}.doc-body{padding:0 12px 20px}
+ .detail-row{grid-template-columns:68px minmax(0,1fr)}.detail-row .key{font-size:9px}.detail-row .value{font-size:9px}
+ .section-caption{font-size:12px}.number-line b{min-width:63px}.ledger th,.ledger td{font-size:8px;padding:8px 1px}
+ .settlement{gap:8px}.totals>div{font-size:9px;padding:7px 4px}.totals .grand{font-size:11px}
+ .stamp{height:42px;width:42px;font-size:7px}.confirm-box{padding:7px;font-size:9px}.legal{font-size:9px;flex-wrap:wrap}
+}
+@page{size:A4;margin:10mm}
+@media print{
+ html,body{width:100%;background:white!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+ .wrap{width:100%;padding:0}.sheet{width:100%;max-width:none;box-shadow:none;border:0}
+ .document-head{padding-left:12mm;padding-right:12mm}.doc-body{padding-left:12mm;padding-right:12mm}
+ .parties,.settlement,.totals,.confirmations,.ledger,.legal{break-inside:avoid}
+ .ledger th,.party h3,.document-head,.totals .grand{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+}
