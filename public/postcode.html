@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<title>원비즈 주소 찾기</title>
+<style>
+*{box-sizing:border-box}html,body{height:100%;margin:0;font-family:"Noto Sans KR","Malgun Gothic",sans-serif;background:#fff;color:#252036}
+body{display:flex;flex-direction:column}
+header{padding:12px 16px;background:#f4f0ff;border-bottom:1px solid #ded6f6;flex:0 0 auto}
+header strong{font-size:16px}header small{display:block;font-size:12px;color:#6b6276;margin-top:4px}
+#postcode{width:100%;flex:1 1 auto;min-height:300px;overflow:hidden}
+#status{padding:10px 16px;font-size:12px;color:#6c6474;border-top:1px solid #eee;flex:0 0 auto}
+</style>
+<script src="https://t1.kakaocdn.net/mapjsapi/bundle/postcode/prod/postcode.v2.js"></script>
+</head>
+<body>
+<header><strong>주소 검색 · 원비즈</strong><small>도로명·지번·건물명으로 검색한 다음 주소를 선택하세요.</small></header>
+<div id="postcode"></div><div id="status" aria-live="polite">카카오 우편번호 검색 서비스</div>
+<script>
+(function(){
+  const status=document.getElementById('status');
+  function start(){
+    if(!window.kakao||typeof kakao.Postcode!=='function'){
+      status.textContent='주소 서비스를 불러오지 못했습니다. 인터넷 연결을 확인해 주세요.';
+      return;
+    }
+    try{
+      new kakao.Postcode({
+        width:'100%',height:'100%',
+        hideMapBtn:true,
+        oncomplete:function(data){
+          const address=String(data.roadAddress||data.address||data.jibunAddress||'').trim();
+          const zip=String(data.zonecode||'').trim();
+          if(!address){status.textContent='주소 결과를 다시 선택해 주세요.';return;}
+          window.location.href='onebiz-postcode://selected?address='+encodeURIComponent(address)+'&zip='+encodeURIComponent(zip);
+        }
+      }).embed(document.getElementById('postcode'));
+      status.textContent='Powered by kakao · 주소를 선택하면 원비즈에 자동 입력됩니다.';
+    }catch(e){status.textContent='주소 검색을 열 수 없습니다. 다시 시도해 주세요.';}
+  }
+  if(document.readyState==='loading')document.addEventListener('DOMContentLoaded',start);else start();
+})();
+</script>
+</body></html>
