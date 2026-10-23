@@ -1,1 +1,68 @@
 *{box-sizing:border-box}html,body{margin:0;padding:0;background:#f4f7fb;color:#11233f;font-family:Arial,"Noto Sans KR",sans-serif}.wrap{max-width:880px;margin:0 auto;padding:18px}.top{display:flex;align-items:center;justify-content:space-between;gap:16px;margin-bottom:18px}.brand{display:flex;align-items:center;gap:10px}.mark{display:grid;place-items:center;width:46px;height:46px;border-radius:14px;background:linear-gradient(145deg,#176eff,#174ccf);color:#fff;font-size:22px;font-weight:900}.brand strong{display:block;font-size:24px}.brand small{display:block;color:#66758d}.top-actions{display:flex;gap:8px}.top button,.actions button{border:0;border-radius:12px;background:#1769ff;color:#fff;padding:11px 15px;font-weight:800;cursor:pointer}.top button.ghost,.actions button.ghost{background:#fff;color:#24415f;border:1px solid #d9e1ec}.status{background:#fff;border:1px solid #e2e8f0;border-radius:18px;padding:32px;text-align:center;color:#66758d}.hidden{display:none}.sheet{background:#fff;border:1px solid #e1e7ef;border-radius:22px;overflow:hidden;box-shadow:0 10px 32px rgba(20,43,80,.08)}.hero{padding:30px 32px;background:linear-gradient(135deg,#edf5ff,#fbfdff);display:flex;justify-content:space-between;gap:20px;border-bottom:1px solid #e4ebf4}.hero h1{margin:0 0 8px;font-size:34px}.meta{color:#65748b;line-height:1.8}.badge{display:inline-block;background:#eaf3ff;color:#0a5ee8;border-radius:999px;padding:7px 11px;font-weight:900;margin-bottom:10px}.amount-box{text-align:right;min-width:220px}.amount-box span{display:block;color:#65748b}.amount-box strong{display:block;font-size:38px;color:#0a5ee8;margin-top:8px}.section{padding:24px 32px;border-bottom:1px solid #edf1f6}.section h2{font-size:18px;margin:0 0 14px}.grid{display:grid;grid-template-columns:1fr 1fr;gap:12px 28px}.row{display:flex;gap:12px}.row b{min-width:96px;color:#475a72}.row span{word-break:break-word}.receipt-box{border:1px solid #dfe7f1;border-radius:16px;padding:20px}.receipt-line{display:flex;justify-content:space-between;gap:18px;padding:12px 0;border-bottom:1px dashed #dfe7f1}.receipt-line:last-child{border-bottom:0}.receipt-line.total{font-size:22px;font-weight:900;color:#0a5ee8}.footer-note{padding:18px 32px;background:#f8fafc;color:#6e7c90;font-size:13px}.actions{display:flex;gap:8px;justify-content:flex-end;padding:18px 32px}@media(max-width:680px){.wrap{padding:0}.top{padding:14px 14px 0;align-items:flex-start}.brand strong{font-size:20px}.mark{width:40px;height:40px}.top-actions{flex-direction:column}.top button{padding:9px 11px;font-size:12px}.sheet{border-radius:0;border-left:0;border-right:0;box-shadow:none}.hero{padding:24px 18px;display:block}.hero h1{font-size:30px}.amount-box{text-align:left;min-width:0;margin-top:18px}.section{padding:20px 18px}.grid{grid-template-columns:1fr}.footer-note,.actions{padding:16px 18px}}@media print{body{background:#fff}.wrap{max-width:none;padding:0}.top,.actions{display:none!important}.sheet{box-shadow:none;border:0;border-radius:0}.hero{background:#fff}.footer-note{background:#fff}}
+/* 간이영수증 전용 원본 양식 복구: 청록색 수령 확인 A4. 견적서 CSS와 독립 */
+:root{--receipt:#14866d;--receipt-dark:#075e50;--receipt-soft:#e7f7f2}
+.sheet{border-radius:4px;max-width:210mm;margin:auto;background:white}
+.receipt-document{border-top:11px solid var(--receipt)}
+.document-head{text-align:center;padding:20px 30px 13px}
+.document-brand{text-align:left;color:var(--receipt);font-size:13px;font-weight:900}
+.document-brand span{font-size:11px;margin-left:6px}
+.document-head h1{font-size:29px;letter-spacing:.34em;color:#19171f;margin:8px 0}
+.document-head small{color:#6e6876;font-size:10px;letter-spacing:.12em}
+.doc-body{padding:0 30px 23px;color:#19171f;font-size:11px}
+.receipt-meta{display:grid;grid-template-columns:1fr 1fr;margin-top:8px;border-top:1px solid #cecbd3;border-left:1px solid #cecbd3}
+.receipt-meta>span{display:flex;min-height:35px;align-items:center;border-bottom:1px solid #cecbd3;border-right:1px solid #cecbd3}
+.receipt-meta b{min-width:96px;background:#f8f7fb;color:#6e6876;padding:11px 8px;margin-right:10px;border-right:1px solid #cecbd3;font-size:10px}
+.to-customer{display:grid;grid-template-columns:100px 1fr;margin-top:18px;min-height:41px;border:1px solid #cecbd3}
+.to-customer>b{display:flex;align-items:center;padding:8px;background:var(--receipt-soft);color:var(--receipt-dark);justify-content:center;border-right:1px solid #cecbd3}
+.to-customer strong{display:flex;align-items:center;font-size:14px;padding:8px 12px}
+.received-highlight{background:var(--receipt-soft);border-radius:10px;padding:18px 20px;margin:18px 0 25px}
+.received-highlight>div:first-child{font-size:12px;color:#625c6a}
+.amount-line{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:8px 0}
+.amount-line strong{font-size:17px;color:var(--receipt-dark)}
+.amount-line b{font-size:22px;color:var(--receipt-dark);white-space:nowrap}
+.received-highlight p{font-size:10px;color:#625c6a;margin:3px 0 0}
+.section-caption{font-size:14px;margin:23px 0 10px;font-weight:900}
+.receipt-items{width:100%;border-collapse:collapse;font-size:10px;table-layout:fixed}
+.receipt-items th{background:var(--receipt);color:#fff;text-align:center;padding:11px 4px;border:1px solid #aed1c9}
+.receipt-items td{padding:12px 5px;text-align:center;border:1px solid #b8d4ce;overflow-wrap:anywhere}
+.receipt-items td.item-name{text-align:left}
+.receipt-items td.num{text-align:right}
+.receipt-items td.emphasis{font-weight:800}
+.payment-info{display:grid;grid-template-columns:1fr 1fr;gap:16px;margin:28px 0 22px}
+.method-note>div{display:grid;grid-template-columns:88px 1fr;min-height:40px;border:1px solid #d7e5e1}
+.method-note>div+div{border-top:0}
+.method-note b{background:var(--receipt-soft);padding:12px 8px;color:var(--receipt-dark)}
+.method-note span{padding:12px 8px}
+.money-calc{border-top:1px solid #d7e5e1;border-left:1px solid #d7e5e1}
+.money-calc>div{display:flex;justify-content:space-between;gap:8px;align-items:center;padding:9px 12px;border-right:1px solid #d7e5e1;border-bottom:1px solid #d7e5e1}
+.money-calc .total{background:var(--receipt-soft);font-weight:900;color:var(--receipt-dark)}
+.money-calc .total strong{font-size:17px}
+.supplier-grid{display:grid;grid-template-columns:1fr 1fr;border-left:1px solid #d7e5e1;border-top:1px solid #d7e5e1}
+.supplier-item{display:grid;grid-template-columns:110px 1fr;min-height:36px}
+.supplier-item>span,.supplier-item>b{display:flex;align-items:center;border-right:1px solid #d7e5e1;border-bottom:1px solid #d7e5e1;padding:8px;font-size:10px;overflow-wrap:anywhere}
+.supplier-item>span{color:#6e6876;background:#f8f7fb}
+.supplier-item>b{font-weight:500}
+.signature{background:#f8f7fb;border-radius:8px;padding:16px;margin:22px 0 38px}
+.signature p{font-size:11px;color:#6e6876;margin:0 0 8px}
+.signature>div{display:flex;align-items:center;justify-content:flex-end;gap:14px;font-size:12px}
+.seal{display:grid;place-items:center;width:55px;height:55px;border:2px solid #c9463c;border-radius:50%;font-size:10px;font-weight:900;line-height:1.4;color:#c9463c;text-align:center;transform:rotate(-8deg)}
+.legal{border-top:2px solid var(--receipt);padding:14px 0;display:flex;justify-content:space-between;gap:14px;font-size:10px;color:#716b78}
+.legal small{color:var(--receipt);white-space:nowrap}
+@media(max-width:680px){
+ .sheet{border-radius:0}.document-head{padding:18px 12px 12px}.document-head h1{font-size:22px;letter-spacing:.18em}
+ .doc-body{padding:0 12px 18px}.receipt-meta b{min-width:67px}.to-customer{grid-template-columns:80px 1fr}
+ .received-highlight{padding:14px 12px}.amount-line{display:block}.amount-line strong{font-size:13px}.amount-line b{display:block;margin-top:6px;font-size:22px}
+ .section-caption{font-size:12px}.receipt-items th,.receipt-items td{font-size:9px;padding:9px 2px}
+ .payment-info{gap:9px}.method-note>div{grid-template-columns:55px 1fr;font-size:9px}.method-note b,.method-note span{padding:9px 5px}
+ .money-calc>div{padding:7px 5px;font-size:9px}.money-calc .total strong{font-size:13px}
+ .supplier-item{grid-template-columns:70px 1fr}.supplier-item>span,.supplier-item>b{font-size:9px;padding:5px}
+ .signature{padding:12px}.legal{flex-wrap:wrap;font-size:9px}
+}
+@page{size:A4;margin:10mm}
+@media print{
+ html,body{background:#fff!important;-webkit-print-color-adjust:exact;print-color-adjust:exact}
+ .wrap{width:100%;padding:0}.sheet{width:100%;max-width:none;box-shadow:none;border:0}
+ .document-head{padding-left:12mm;padding-right:12mm}.doc-body{padding-left:12mm;padding-right:12mm}
+ .receipt-document,.receipt-items th,.signature,.received-highlight,.money-calc .total{-webkit-print-color-adjust:exact;print-color-adjust:exact}
+ .receipt-meta,.to-customer,.received-highlight,.payment-info,.supplier-grid,.signature{break-inside:avoid}
+}
