@@ -57,6 +57,7 @@ function render(data){
  <div class="actions"><button class="ghost" id="shareBottom" type="button">공유</button><button id="printBottom" type="button">PDF 저장/인쇄</button></div>`;
  $('#printBottom').onclick=()=>window.print();$('#shareBottom').onclick=share;
 }
-async function share(){try{if(navigator.share)await navigator.share({title:'ONEBIZ 간이영수증',text:'간이영수증을 확인해 주세요.',url:location.href});else{await navigator.clipboard.writeText(location.href);alert('간이영수증 링크를 복사했습니다.');}}catch{}}
-async function start(){if(!/^[A-Za-z0-9_-]{43}$/.test(token)){ $('#status').textContent='올바르지 않은 간이영수증 링크입니다.';return;}try{const r=await fetch('/api/public/receipt/'+encodeURIComponent(token),{cache:'no-store'}),b=await r.json();if(!r.ok)throw new Error(b.error||'간이영수증을 불러오지 못했습니다.');render(b);}catch(e){$('#status').innerHTML='<b>간이영수증을 열 수 없습니다.</b><br>'+esc(e.message);}}
-$('#printBtn').onclick=()=>window.print();$('#shareBtn').onclick=share;start();
+async function share(){try{const url=window.OnebizDocumentAccess.shareUrl();if(navigator.share)await navigator.share({title:'ONEBIZ 간이영수증',text:'간이영수증을 확인해 주세요.',url});else{await navigator.clipboard.writeText(url);alert('간이영수증 링크를 복사했습니다.');}}catch{}}
+async function start(){if(!/^[A-Za-z0-9_-]{43}$/.test(token))throw new Error('올바르지 않은 간이영수증 링크입니다.');const r=await fetch('/api/public/receipt/'+encodeURIComponent(token),{cache:'no-store',credentials:'same-origin'}),b=await r.json();if(!r.ok)throw new Error(b.error||'간이영수증을 불러오지 못했습니다.');render(b);}
+$('#printBtn').onclick=()=>window.print();$('#shareBtn').onclick=share;
+if(window.OnebizDocumentAccess)window.OnebizDocumentAccess.mount({kind:'receipt',token,onOpen:start});

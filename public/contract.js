@@ -5,7 +5,6 @@ const money=v=>new Intl.NumberFormat('ko-KR').format(Math.round(Number(v)||0))+'
 const token=location.pathname.split('/').filter(Boolean).pop()||'';
 function render(data){
  const s=data.supplier||{},c=data.contract||{};
- if(data.originalUrl){location.replace(data.originalUrl);return;}
  $('#status').classList.add('hidden');
  const root=$('#contract');root.classList.remove('hidden');
  root.innerHTML=`<div class="hero"><div><span class="badge">체결완료 계약서</span><h1>계약서</h1><div class="meta"><b>${esc(s.businessName||'ONEBIZ')}</b><br>계약번호 ${esc(c.id||'-')}<br>계약일 ${esc(c.contractDate||'-')}</div></div><div class="amount-box"><span>계약금액</span><strong>${money(c.amount)}</strong><span>${c.signed?'전자서명 완료':'확인 필요'}</span></div></div>
@@ -27,6 +26,7 @@ function drawSignature(strokes){
  const ctx=canvas.getContext('2d');ctx.strokeStyle='#17243c';ctx.lineWidth=2.5;ctx.lineCap='round';
  for(const stroke of strokes){ctx.beginPath();stroke.forEach((p,i)=>{const x=20+(p[0]-minX)*scale,y=20+(p[1]-minY)*scale;i?ctx.lineTo(x,y):ctx.moveTo(x,y);});ctx.stroke();}
 }
-async function share(){try{if(navigator.share)await navigator.share({title:'ONEBIZ 계약서',text:'체결된 계약서를 확인해 주세요.',url:location.href});else{await navigator.clipboard.writeText(location.href);alert('계약서 링크를 복사했습니다.');}}catch{}}
-async function start(){if(!/^[A-Za-z0-9_-]{43}$/.test(token)){ $('#status').textContent='올바르지 않은 계약서 링크입니다.';return;}try{const r=await fetch('/api/public/contract/'+encodeURIComponent(token),{cache:'no-store'}),b=await r.json();if(!r.ok)throw new Error(b.error||'계약서를 불러오지 못했습니다.');render(b);}catch(e){$('#status').innerHTML='<b>계약서를 열 수 없습니다.</b><br>'+esc(e.message);}}
-$('#printBtn').onclick=()=>window.print();$('#shareBtn').onclick=share;start();
+async function share(){try{const url=window.OnebizDocumentAccess.shareUrl();if(navigator.share)await navigator.share({title:'ONEBIZ 계약서',text:'체결된 계약서를 확인해 주세요.',url});else{await navigator.clipboard.writeText(url);alert('계약서 링크를 복사했습니다.');}}catch{}}
+async function start(){if(!/^[A-Za-z0-9_-]{43}$/.test(token))throw new Error('올바르지 않은 계약서 링크입니다.');const r=await fetch('/api/public/contract/'+encodeURIComponent(token),{cache:'no-store',credentials:'same-origin'}),b=await r.json();if(!r.ok)throw new Error(b.error||'계약서를 불러오지 못했습니다.');if(b.originalUrl)return {redirect:true};render(b);return {rendered:true};}
+$('#printBtn').onclick=()=>window.print();$('#shareBtn').onclick=share;
+if(window.OnebizDocumentAccess)window.OnebizDocumentAccess.mount({kind:'contract',token,onOpen:start});

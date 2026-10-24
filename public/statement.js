@@ -64,6 +64,7 @@ function render(data){
  <div class="actions"><button class="ghost" id="shareBottom" type="button">공유</button><button id="printBottom" type="button">PDF 저장/인쇄</button></div>`;
  $('#printBottom').onclick=()=>window.print();$('#shareBottom').onclick=share;
 }
-async function share(){try{if(navigator.share)await navigator.share({title:'ONEBIZ 거래명세서',text:'거래명세서를 확인해 주세요.',url:location.href});else{await navigator.clipboard.writeText(location.href);alert('거래명세서 링크를 복사했습니다.');}}catch{}}
-async function start(){if(!/^[A-Za-z0-9_-]{43}$/.test(token)){ $('#status').textContent='올바르지 않은 거래명세서 링크입니다.';return;}try{const r=await fetch('/api/public/statement/'+encodeURIComponent(token),{cache:'no-store'}),b=await r.json();if(!r.ok)throw new Error(b.error||'거래명세서를 불러오지 못했습니다.');render(b);}catch(e){$('#status').innerHTML='<b>거래명세서를 열 수 없습니다.</b><br>'+esc(e.message);}}
-$('#printBtn').onclick=()=>window.print();$('#shareBtn').onclick=share;start();
+async function share(){try{const url=window.OnebizDocumentAccess.shareUrl();if(navigator.share)await navigator.share({title:'ONEBIZ 거래명세서',text:'거래명세서를 확인해 주세요.',url});else{await navigator.clipboard.writeText(url);alert('거래명세서 링크를 복사했습니다.');}}catch{}}
+async function start(){if(!/^[A-Za-z0-9_-]{43}$/.test(token))throw new Error('올바르지 않은 거래명세서 링크입니다.');const r=await fetch('/api/public/statement/'+encodeURIComponent(token),{cache:'no-store',credentials:'same-origin'}),b=await r.json();if(!r.ok)throw new Error(b.error||'거래명세서를 불러오지 못했습니다.');render(b);}
+$('#printBtn').onclick=()=>window.print();$('#shareBtn').onclick=share;
+if(window.OnebizDocumentAccess)window.OnebizDocumentAccess.mount({kind:'statement',token,onOpen:start});

@@ -19,10 +19,14 @@
     ['contracts', '계약', '✎', '계약서', '계약 조건과 전자서명 상태를 관리합니다.'],
     ['payments', '대금', '₩', '대금관리', '입금과 미수금을 한눈에 확인합니다.'],
     ['employees', '직원', '👥', '직원관리', '직원·근로계약·급여 정보를 관리합니다.'],
+    ['documents', '보낸 문서', '▤', '보낸 문서 · 알림', '내 문서의 발송·열림·서명 진행 내역을 확인합니다.'],
     ['settings', '더보기', '•••', 'ONEBIZ 설정', '사업자 정보와 PC·모바일 웹 연동 상태를 확인합니다.']
   ];
 
-  let route = 'home';
+  const entryParams = new URLSearchParams(location.search);
+  let route = location.pathname === '/document-center' ? 'documents' : (navItems.some(n=>n[0]===entryParams.get('page')) ? entryParams.get('page') : 'home');
+  let documentTab = ['documents','notifications','settings'].includes(entryParams.get('tab')) ? entryParams.get('tab') : 'documents';
+  let documentCenter = null;
   let csrf = '';
   let saving = false, saveAgain = false, conflict = false;
   let memberId = '';
@@ -93,6 +97,7 @@
     setSync('busy','불러오는 중');
     const body = await api('/api/snapshot'); snapshot=normalizeSnapshot(body); memberId=body.userId;
     $('#sidebarMemberId').textContent=memberId;conflict=false;setSync('ok','서버 버전 '+body.revision);render();
+    if(route!=='documents')void loadDocumentBadge();
   }
   async function saveSnapshot() {
     saveTimer=null;
@@ -116,10 +121,11 @@
   function renderNav() {
     sideNav.innerHTML = navItems.map(([id,label,icon]) => `<button class="nav-item ${route===id?'active':''}" data-route="${id}"><span class="nav-icon">${icon}</span><span>${label}</span></button>`).join('');
     mobileNav.innerHTML = navItems.slice(0,6).map(([id,label,icon]) => `<button class="${route===id?'active':''}" data-route="${id}"><span>${icon}</span><span>${label}</span></button>`).join('');
-    $$('#sideNav [data-route], #mobileNav [data-route]').forEach(b => b.onclick = () => { route = b.dataset.route; render(); });
+    $$('#sideNav [data-route], #mobileNav [data-route]').forEach(b => b.onclick = () => { route = b.dataset.route;if(route==='documents')documentTab='documents';render(); });
   }
   function render() {
     if (!snapshot) return;
+    if(documentCenter){documentCenter.destroy();documentCenter=null;}
     renderNav();
     const item = navItems.find(n => n[0] === route) || navItems[0];
     pageTitle.textContent = item[3];
@@ -130,7 +136,20 @@
     else if (route === 'contracts') renderContracts();
     else if (route === 'payments') renderPayments();
     else if (route === 'employees') renderEmployees();
+    else if (route === 'documents') {
+      if(window.OnebizDocumentCenter)documentCenter=window.OnebizDocumentCenter.mount({root:content,request:api,notify:showToast,onUnread:updateDocumentBadge,tab:documentTab});
+      else content.innerHTML='<div class="empty">문서 알림 화면을 불러오지 못했습니다. 화면을 새로고침해 주세요.</div>';
+    }
     else renderSettings();
+  }
+
+  function updateDocumentBadge(value){
+    const n=Math.max(0,Math.floor(Number(value)||0)),badge=$('#documentBellCount'),button=$('#documentBellBtn');
+    badge.textContent=n>99?'99+':String(n);badge.hidden=n===0;
+    button.setAttribute('aria-label','알림함, 미확인 알림 '+n+'개');
+  }
+  async function loadDocumentBadge(){
+    try{const value=await api('/api/document-center?limit=1');updateDocumentBadge(value.unreadCount);}catch{}
   }
 
   function renderHome() {
@@ -438,6 +457,7 @@
   $('#logoutBtn').onclick=()=>logout();
   $('#refreshBtn').onclick=()=>loadSnapshot().catch(e=>showToast(e.message));
   $('#profileBtn').onclick=()=>{route='settings';render();};
+  $('#documentBellBtn').onclick=()=>{route='documents';documentTab='notifications';render();};
   async function boot(){try{const me=await api('/api/me');csrf=me.csrf;if(!me.user.profileComplete){location.replace('/');return;}memberId=me.user.id;appShell.classList.remove('hidden');await loadSnapshot();}catch(e){showToast(e.message);}}
   window.addEventListener('beforeunload',e=>{if(saving||saveTimer||conflict){e.preventDefault();e.returnValue='';}});
   boot();

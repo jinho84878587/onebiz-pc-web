@@ -75,8 +75,9 @@ async function share(){
  const q=currentQuote?.quote||{},supplier=currentQuote?.supplier||{};
  const title=(supplier.businessName||'ONEBIZ')+' 견적서 '+(q.id||'');
  try{
-  if(navigator.share)await navigator.share({title,text:'견적서를 확인해 주세요.',url:location.href});
-  else{await navigator.clipboard.writeText(location.href);alert('견적서 링크를 복사했습니다.');}
+  const url=window.OnebizDocumentAccess.shareUrl();
+  if(navigator.share)await navigator.share({title,text:'견적서를 확인해 주세요.',url});
+  else{await navigator.clipboard.writeText(url);alert('견적서 링크를 복사했습니다.');}
  }catch{}
 }
 async function start(){
@@ -86,8 +87,8 @@ async function start(){
   const b=await r.json();
   if(!r.ok)throw new Error(b.error||'견적서를 불러오지 못했습니다.');
   render(b);
- }catch(e){ $('#status').innerHTML='<b>견적서를 열 수 없습니다.</b><br>'+esc(e.message); }
+ }catch(e){ throw e; }
 }
 $('#printBtn').onclick=()=>window.print();
 $('#shareBtn').onclick=share;
-start();
+if(window.OnebizDocumentAccess)window.OnebizDocumentAccess.mount({kind:'quote',token,onOpen:start});

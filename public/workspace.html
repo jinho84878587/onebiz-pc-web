@@ -6,6 +6,7 @@
   <meta name="theme-color" content="#3155e7" />
   <title>ONEBIZ | 원비즈</title>
   <link rel="stylesheet" href="/workspace.css" />
+  <link rel="stylesheet" href="/document-center.css" />
 </head>
 <body>
   <div id="appShell" class="app-shell hidden">
@@ -28,6 +29,7 @@
           <p id="pageSubtitle">오늘의 사업 현황을 한눈에 확인하세요.</p>
         </div>
         <div class="top-actions"><a href="/?page=account">통합계정</a>
+          <button id="documentBellBtn" class="icon-button document-bell" type="button" title="알림함" aria-label="알림함, 미확인 알림 0개"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 7-3 9h18c0-2-3-2-3-9M10 21h4"/></svg><span id="documentBellCount" class="document-bell-count" hidden>0</span></button>
           <span id="syncBadge" class="sync-badge">동기화 대기</span>
           <button id="refreshBtn" class="icon-button" title="새로고침">↻</button>
           <button id="profileBtn" class="avatar-button" title="사업자 정보">OB</button>
@@ -52,6 +54,7 @@
 
   <div id="toast" class="toast" role="status"></div>
   <div id="printArea" class="print-area"></div>
+  <script src="/document-center.js" defer></script>
   <script src="/workspace.js" defer></script>
 </body>
 </html>

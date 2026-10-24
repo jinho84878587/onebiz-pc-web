@@ -9,6 +9,7 @@ const signShortLinks=require('./lib/sign-short-links');
 const contractOriginals=require('./lib/contract-originals');
 const paymentDocuments=require('./lib/payment-documents');
 const quotePricing=require('./lib/quote-pricing');
+const {createTracking,automatedRequest}=require('./lib/document-tracking');
 const env=process.env,mode=env.APP_MODE||'production',demo=mode==='demo',test=mode==='test',local=demo||test;
 check(['production','demo','test'].includes(mode),500,'Invalid APP_MODE');
 const host=local?'127.0.0.1':'0.0.0.0';const port=Number(env.PORT||10000);
@@ -17,6 +18,9 @@ if(!local){check(origin.startsWith('https://'),500,'Production requires PUBLIC_O
 check(new URL(origin).origin===origin,500,'PUBLIC_ORIGIN must not contain a path or trailing slash.');
 const store=createStore(env.DATA_FILE||path.join(__dirname,'data',local?'demo.sqlite':'onebiz.sqlite'),env.DATA_KEY_HEX||(local?'11'.repeat(32):''));
 const {one,all,run,tx,log,rate,hash,seal,open}=store;
+const documentTracking=createTracking(store,origin,{providerConfigured:!!(env.SOLAPI_API_KEY&&env.SOLAPI_API_SECRET)});
+documentTracking.backfill();
+documentTracking.recoverPending();
 const policyVersion='2026-09-18-draft';
 function json(res,status,body){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(body));}
 function redirect(res,to){res.writeHead(303,{Location:to,'Cache-Control':'no-store'});res.end();}
@@ -202,6 +206,7 @@ async function completedContractSource(actor,contractId){
   check(status.signed,409,'전자서명 원본의 서명 완료를 먼저 확인해 주세요.');
   let signature;try{signature=await websign.originalSignature(info.originalUrl);}catch{throw new HttpError(502,'서명 이미지가 포함된 원본을 보관할 수 없어 발송하지 않았습니다.');}
   contractOriginals.archive(store,actor,userContract(actor,contractId),status,signature);
+  documentTracking.signed(actor,contractId,info.providerId,websign.fingerprint(userContract(actor,contractId),actor),status.signedAt);
   info=contractOriginals.source(store,actor,contractId);
  }
  return info;
@@ -274,9 +279,89 @@ function dispatchAlimtalkPlan(dispatchRow,record,status,changed){
 }
 function alimtalkResultLog(actor,kind,targetRef,data,result,status){
  const id=crypto.randomUUID();
- const safe={httpStatus:result?.status||0,...templateInspector.failureSummary(result)};
+ const ids=require('./lib/document-tracking').providerIds(result);
+ const safe={httpStatus:result?.status||0,...templateInspector.failureSummary(result),...ids};
  run('INSERT INTO alimtalk_logs(id,actor,kind,target_ref,phone_mask,template_id,status,response,created) VALUES(?,?,?,?,?,?,?,?,?)',id,actor,kind,targetRef,data.phoneMask||phoneMask(data.to),data.templateId,status,JSON.stringify(safe),Date.now());
  return id;
+}
+
+// A link's explicit open action is separate from provider delivery and signing.
+// No public GET/HEAD endpoint records an open, including old redirect links.
+function documentAccess(kind,token){
+ check(['quote','contract','statement','receipt','sign'].includes(kind)&&/^[A-Za-z0-9_-]{43}$/.test(token),404,'문서 링크를 찾을 수 없습니다.');
+ const tokenHash=hash(token);let tracked=documentTracking.byToken(token),link,payload,sourceId='',sourceType=kind==='contract'||kind==='sign'?'contract':'quote',redirectUrl='';
+ if(kind==='sign'){
+  redirectUrl=signShortLinks.resolve(store,token);link=one('SELECT * FROM sign_redirect_links WHERE token_hash=?',tokenHash);sourceId=link.contract_id;
+ }else if(tracked){
+  const meta=documentTracking.metadata(tracked);check(meta.publicKind===kind,404,'현재 사용할 수 없는 문서 링크입니다.');
+  link={user_id:tracked.user_id,expires:tracked.expires,created:tracked.created};payload=meta.payload;sourceId=tracked.source_id;sourceType=tracked.source_type;
+  if(kind==='contract'){const original=contractOriginals.resolve(store,token);redirectUrl=original?.originalUrl||'';payload=payload||original;}
+ }else if(kind==='quote'){
+  link=one('SELECT * FROM quote_links WHERE token_hash=?',tokenHash);sourceId=link?.quote_id||'';
+ }else if(kind==='contract'){
+  payload=contractOriginals.resolve(store,token);link=one('SELECT * FROM signed_contract_links WHERE token_hash=?',tokenHash)||one('SELECT * FROM contract_links WHERE token_hash=?',tokenHash);sourceId=link?.contract_id||'';redirectUrl=payload?.originalUrl||'';
+ }else{
+  const table=kind==='receipt'?'receipt_links':'statement_links';
+  link=one('SELECT * FROM quote_document_links WHERE token_hash=? AND kind=?',tokenHash,kind)||one(`SELECT * FROM ${table} WHERE token_hash=?`,tokenHash);
+  const archived=one('SELECT * FROM payment_document_archives WHERE token_hash=? AND kind=?',tokenHash,kind);
+  if(archived)payload=open(archived.body);link=link||archived;sourceId=link?.quote_id||link?.contract_id||payload?.[kind]?.quoteId||payload?.[kind]?.contractId||'';sourceType=link?.contract_id?'contract':'quote';
+ }
+ check(link,404,'문서 링크를 찾을 수 없습니다.');check(link.expires>Date.now(),410,'문서 링크가 만료되었습니다.');check(one('SELECT status FROM users WHERE id=?',link.user_id)?.status==='active',410,'현재 사용할 수 없는 문서 링크입니다.');
+ if(!tracked){
+  const saved=one('SELECT body FROM snapshots WHERE user_id=?',link.user_id),snap=saved?open(saved.body):null;
+  const source=(sourceType==='contract'?snap?.data?.contracts:snap?.data?.quotes)?.find(x=>String(x.id)===String(sourceId));
+  if(kind==='quote')check(source,404,'견적서를 찾을 수 없습니다.');
+  if(kind==='contract'&&!payload)check(source?.signed===true,404,'체결 계약서를 찾을 수 없습니다.');
+  const document=payload?.[kind]||source||{};
+  const id=documentTracking.create({actor:link.user_id,kind:kind==='sign'?'contract':kind,variant:kind==='sign'?'sign_request':kind==='contract'?'completed':'document',publicKind:kind,sourceId,sourceType,token,expires:link.expires,status:'not_sent',customer:document.customer,phoneMask:phoneMask(document.phone),amount:Number(document.total??document.amount??document.paidAmount)||0,signedAt:document.signedAt,legacy:true,metadataNotice:'이전 링크 · 열기 기능 적용 시점에 확인한 문서 정보입니다.'},link.created||Date.now());
+  tracked=documentTracking.row(id);
+ }
+ return {record:tracked,redirectUrl,action:kind==='sign'?'sign_link_opened':redirectUrl?'original_link_opened':'opened'};
+}
+function publicDocumentWriteGuard(req){
+ check(req.headers.origin===origin,403,'허용되지 않은 출처입니다.');
+ check(!req.headers['sec-fetch-site']||req.headers['sec-fetch-site']==='same-origin',403,'같은 문서 화면에서 다시 시도해 주세요.');
+}
+function documentAccessMode(req,record,previewToken){
+ const session=getSession(req,'user',true);
+ if(documentTracking.isOwnerPreview(record,session?.actor,previewToken))return 'owner_preview';
+ return automatedRequest(req)?'automated':'customer';
+}
+async function fetchDeliveryGroup(groupId){
+ check(env.SOLAPI_API_KEY&&env.SOLAPI_API_SECRET,503,'전달 결과 조회 설정이 없습니다.');
+ const controller=new AbortController(),timeout=setTimeout(()=>controller.abort(),5000);
+ try{
+  const response=await fetch('https://api.solapi.com/messages/v4/groups/'+encodeURIComponent(groupId)+'/messages?limit=100',{headers:{Authorization:alimtalkAuth(),Accept:'application/json'},signal:controller.signal});
+  check(response.ok,502,'전달 결과 조회가 지연되고 있습니다.');
+  return await response.json();
+ }finally{clearTimeout(timeout);}
+}
+async function pollTrackedSignature(record){
+ documentTracking.signatureAttempt(record);
+ try{
+  const contract=userContract(record.user_id,record.source_id),digest=websign.fingerprint(contract,record.user_id);
+  if(digest!==record.sign_payload_hash){run('UPDATE document_outbox SET next_sign_poll_at=0 WHERE id=?',record.id);return;}
+  const status=await websign.status(record.sign_provider_id,env.HIWON_SIGN_APP_KEY);
+  if(!status.signed)return;
+  const link=one('SELECT sign_url FROM websign_links WHERE user_id=? AND contract_id=? AND provider_id=? AND payload_hash=?',record.user_id,record.source_id,record.sign_provider_id,digest);
+  check(link,409,'서명 원본을 확인할 수 없습니다.');
+  const signature=await websign.originalSignature(open(link.sign_url));
+  contractOriginals.archive(store,record.user_id,contract,status,signature);
+  documentTracking.signed(record.user_id,record.source_id,record.sign_provider_id,digest,status.signedAt);
+ }catch{/* A failed read never fabricates completion or changes business data. */}
+}
+let documentRefreshInFlight=null;
+async function refreshDocumentTracking(actor='',force=false){
+ if(documentRefreshInFlight){await documentRefreshInFlight;return {checked:0,pending:true};}
+ const work=async()=>{
+  documentTracking.recoverPending();
+  const deliveries=env.SOLAPI_API_KEY&&env.SOLAPI_API_SECRET?documentTracking.deliveryDue(actor,6,force):[];
+  const signatures=env.HIWON_SIGN_APP_KEY?documentTracking.signatureDue(actor,2,force):[];
+  const jobs=[...deliveries.map(r=>()=>documentTracking.pollDelivery(r,fetchDeliveryGroup)),...signatures.map(r=>()=>pollTrackedSignature(r))];
+  let next=0;await Promise.all(Array.from({length:Math.min(3,jobs.length)},async()=>{while(next<jobs.length){const job=jobs[next++];await job();}}));
+  return {checked:jobs.length,pending:false};
+ };
+ documentRefreshInFlight=work();try{return await documentRefreshInFlight;}finally{documentRefreshInFlight=null;}
 }
 function alimtalkSendingAllowed(mode){
  return env.SOLAPI_SEND_ENABLED==='true'&&(mode==='user'?env.SOLAPI_MEMBER_SEND_ENABLED==='true':env.SOLAPI_DISPATCH_AUTO_ENABLED==='true');
@@ -311,20 +396,40 @@ async function route(req,res){
  res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Frame-Options','DENY');
  res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
  if(!local)res.setHeader('Strict-Transport-Security','max-age=31536000');
- if(p==='/health')return json(res,200,{ok:true,version:'2.0.0-dev.1',mode});
- if(/^\/contract\/[A-Za-z0-9_-]{43}$/.test(p)&&(m==='GET'||m==='HEAD')){
-  limit(req,'public-original:'+ip(req),120,600000);
-  const original=contractOriginals.resolve(store,p.split('/').pop());
+ if(p==='/health')return json(res,200,{ok:true,version:'2.0.0-dev.1',mode,documentCenter:true,documentCenterVersion:1});
+ if(/^\/(contract|s)\/[A-Za-z0-9_-]{43}$/.test(p)&&(m==='GET'||m==='HEAD')){
+  limit(req,'public-document-landing:'+ip(req),120,600000);
+  // Validate expiry/revocation without redirects or any open-state mutation.
+  if(p.startsWith('/s/'))signShortLinks.resolve(store,p.slice(3));
+  else contractOriginals.resolve(store,p.split('/').pop());
   res.setHeader('Cache-Control','no-store');res.setHeader('X-Robots-Tag','noindex, nofollow');
-  if(original?.originalUrl){
-   res.writeHead(302,{Location:original.originalUrl,'Cache-Control':'no-store'});return res.end();
-  }
  }
- if(/^\/s\/[A-Za-z0-9_-]{43}$/.test(p)&&(m==='GET'||m==='HEAD')){
-  limit(req,'public-sign:'+ip(req),120,600000);
-  const target=signShortLinks.resolve(store,p.slice(3));
-  res.writeHead(302,{'Location':target,'Cache-Control':'no-store','X-Robots-Tag':'noindex, nofollow'});
-  return res.end();
+ if(p==='/api/document-center'&&m==='GET'){
+  const session=getSession(req);return json(res,200,documentTracking.center(session.actor,u.searchParams.get('limit')));
+ }
+ if(/^\/api\/document-center\/documents\/[^/]+$/.test(p)&&m==='GET'){
+  const session=getSession(req);return json(res,200,documentTracking.document(session.actor,decodeURIComponent(p.split('/').pop())));
+ }
+ if(p==='/api/document-center/refresh'&&m==='POST'){
+  const session=getSession(req);writeGuard(req,session);await body(req);limit(req,'document-refresh:'+session.actor,6,600000);
+  const refresh=await refreshDocumentTracking(session.actor,true);getSession(req);
+  return json(res,200,{...documentTracking.center(session.actor,50),refresh});
+ }
+ if(p==='/api/document-center/notifications/read'&&m==='POST'){
+  const session=getSession(req);writeGuard(req,session);const unreadCount=documentTracking.readNotifications(session.actor,await body(req));return json(res,200,{ok:true,unreadCount});
+ }
+ if(p==='/api/document-center/settings'&&m==='PUT'){
+  const session=getSession(req);writeGuard(req,session);return json(res,200,{ok:true,settings:documentTracking.updateSettings(session.actor,await body(req))});
+ }
+ if(/^\/api\/public\/document-access\/(quote|contract|statement|receipt|sign)\/[A-Za-z0-9_-]{43}\/(challenge|open)$/.test(p)&&m==='POST'){
+  publicDocumentWriteGuard(req);limit(req,'document-access:'+ip(req),120,600000);
+  const parts=p.split('/'),kind=parts[4],token=parts[5],action=parts[6],input=await body(req),access=documentAccess(kind,token);
+  const accessMode=documentAccessMode(req,access.record,input.previewToken);
+  let visitor=cookie(req,'ob_document_visitor');
+  if(!/^[A-Za-z0-9_-]{43}$/.test(visitor)){visitor=random();if(action==='challenge')setCookie(res,'ob_document_visitor',visitor,30*86400);}
+  if(action==='challenge')return json(res,200,documentTracking.challenge(access.record,visitor,accessMode));
+  const result=documentTracking.opened(access.record,visitor,input.challenge,accessMode,access.action);
+  return json(res,200,{...result,...(access.redirectUrl?{redirectUrl:access.redirectUrl}:{})});
  }
  if(p==='/api/config'&&m==='GET')return json(res,200,{mode,providers:Object.fromEntries(['kakao','naver','google'].map(k=>[k,provider.configured(env,k)])),phoneEnabled:local||!!(env.NCP_SERVICE_ID&&env.NCP_ACCESS_KEY&&env.NCP_SECRET_KEY&&env.NCP_SENDER),policyVersion,nativeSync:'automatic-account-sync',push:false,payments:false,subscription:{billingConnected:false,plans:['free','pro'],featureGateReady:true}});
  if(p==='/api/auth/phone/request'&&m==='POST'){
@@ -396,22 +501,36 @@ async function route(req,res){
   log(s.actor,'snapshot.save',s.actor,{revision});return json(res,200,{ok:true,revision});
  }
  if(/^\/api\/quotes\/[^/]+\/public-link$/.test(p)&&m==='POST'){
-  const s=getSession(req);writeGuard(req,s);const quoteId=decodeURIComponent(p.split('/')[3]),row=one('SELECT body FROM snapshots WHERE user_id=?',s.actor);check(row,404,'견적서 데이터를 먼저 동기화해 주세요.');const snap=open(row.body),q=(snap.data?.quotes||[]).find(x=>String(x.id)===quoteId);check(q,404,'견적서를 찾을 수 없습니다.');const expires=quoteValidUntil(q);check(expires>Date.now(),400,'견적 유효기간이 지났습니다. 유효기간을 수정한 후 다시 발송해 주세요.');const token=random();run('INSERT OR REPLACE INTO quote_links(token_hash,user_id,quote_id,expires,created,last_view) VALUES(?,?,?,?,?,0)',hash(token),s.actor,quoteId,expires,Date.now());log(s.actor,'quote.public_link.create',quoteId,{expires});return json(res,200,{ok:true,token,url:origin+'/quote/'+token,expiresAt:expires});
+  const s=getSession(req);writeGuard(req,s);const quoteId=decodeURIComponent(p.split('/')[3]),row=one('SELECT body FROM snapshots WHERE user_id=?',s.actor);check(row,404,'견적서 데이터를 먼저 동기화해 주세요.');const snap=open(row.body),q=(snap.data?.quotes||[]).find(x=>String(x.id)===quoteId);check(q,404,'견적서를 찾을 수 없습니다.');const expires=quoteValidUntil(q);check(expires>Date.now(),400,'견적 유효기간이 지났습니다. 유효기간을 수정한 후 다시 발송해 주세요.');const token=random();run('INSERT OR REPLACE INTO quote_links(token_hash,user_id,quote_id,expires,created,last_view) VALUES(?,?,?,?,?,0)',hash(token),s.actor,quoteId,expires,Date.now());
+  documentTracking.create({actor:s.actor,kind:'quote',sourceId:quoteId,customer:q.customer,phoneMask:phoneMask(q.phone),amount:quoteTotal(q),token,expires,status:'not_sent',payload:publicQuotePayload(s.actor,q)});
+  log(s.actor,'quote.public_link.create',quoteId,{expires});return json(res,200,{ok:true,token,url:origin+'/quote/'+token,expiresAt:expires});
  }
  if(/^\/api\/quotes\/[^/]+\/public-link$/.test(p)&&m==='DELETE'){
-  const s=getSession(req);writeGuard(req,s);const quoteId=decodeURIComponent(p.split('/')[3]);run('DELETE FROM quote_links WHERE user_id=? AND quote_id=?',s.actor,quoteId);log(s.actor,'quote.public_link.revoke',quoteId);return json(res,200,{ok:true});
+  const s=getSession(req);writeGuard(req,s);const quoteId=decodeURIComponent(p.split('/')[3]);run('DELETE FROM quote_links WHERE user_id=? AND quote_id=?',s.actor,quoteId);run("UPDATE document_outbox SET expires=0 WHERE user_id=? AND kind='quote' AND source_id=?",s.actor,quoteId);log(s.actor,'quote.public_link.revoke',quoteId);return json(res,200,{ok:true});
  }
  if(/^\/api\/public\/quote\/[A-Za-z0-9_-]{43}$/.test(p)&&m==='GET'){
-  limit(req,'public-quote:'+ip(req),120,600000);const token=p.split('/').pop(),link=one('SELECT * FROM quote_links WHERE token_hash=?',hash(token));check(link,404,'견적 링크를 찾을 수 없습니다.');check(link.expires>Date.now(),410,'견적 링크가 만료되었습니다.');const row=one('SELECT body FROM snapshots WHERE user_id=?',link.user_id);check(row,404,'견적서를 찾을 수 없습니다.');const snap=open(row.body),q=(snap.data?.quotes||[]).find(x=>String(x.id)===String(link.quote_id));check(q,404,'견적서를 찾을 수 없습니다.');run('UPDATE quote_links SET last_view=? WHERE token_hash=?',Date.now(),link.token_hash);return json(res,200,{ok:true,...publicQuotePayload(link.user_id,q),linkExpiresAt:link.expires});
+  limit(req,'public-quote:'+ip(req),120,600000);const token=p.split('/').pop(),tracked=documentTracking.byToken(token);
+  if(tracked&&tracked.kind==='quote'){
+   check(tracked.expires>Date.now(),410,'견적 링크가 만료되었거나 사용할 수 없습니다.');check(one('SELECT status FROM users WHERE id=?',tracked.user_id)?.status==='active',410,'현재 사용할 수 없는 견적서입니다.');
+   const saved=documentTracking.metadata(tracked).payload;if(saved)return json(res,200,{ok:true,...saved,linkExpiresAt:tracked.expires});
+  }
+  const link=one('SELECT * FROM quote_links WHERE token_hash=?',hash(token));check(link,404,'견적 링크를 찾을 수 없습니다.');check(link.expires>Date.now(),410,'견적 링크가 만료되었습니다.');check(one('SELECT status FROM users WHERE id=?',link.user_id)?.status==='active',410,'현재 사용할 수 없는 견적서입니다.');const row=one('SELECT body FROM snapshots WHERE user_id=?',link.user_id);check(row,404,'견적서를 찾을 수 없습니다.');const snap=open(row.body),q=(snap.data?.quotes||[]).find(x=>String(x.id)===String(link.quote_id));check(q,404,'견적서를 찾을 수 없습니다.');return json(res,200,{ok:true,...publicQuotePayload(link.user_id,q),linkExpiresAt:link.expires});
  }
  if(/^\/api\/contracts\/[^/]+\/public-link$/.test(p)&&m==='POST'){
-  const s=getSession(req);writeGuard(req,s);const contractId=decodeURIComponent(p.split('/')[3]),row=one('SELECT body FROM snapshots WHERE user_id=?',s.actor);check(row,404,'계약서 데이터를 먼저 동기화해 주세요.');const snap=open(row.body),contract=(snap.data?.contracts||[]).find(x=>String(x.id)===contractId);check(contract,404,'계약서를 찾을 수 없습니다.');check(contract.signed===true,400,'체결 완료된 계약서만 확인 링크를 만들 수 있습니다.');const expires=Date.now()+365*86400000,token=random();run('INSERT OR REPLACE INTO contract_links(token_hash,user_id,contract_id,expires,created,last_view) VALUES(?,?,?,?,?,0)',hash(token),s.actor,contractId,expires,Date.now());return json(res,200,{ok:true,token,url:origin+'/contract/'+token,expiresAt:expires});
+  const s=getSession(req);writeGuard(req,s);const contractId=decodeURIComponent(p.split('/')[3]),row=one('SELECT body FROM snapshots WHERE user_id=?',s.actor);check(row,404,'계약서 데이터를 먼저 동기화해 주세요.');const snap=open(row.body),contract=(snap.data?.contracts||[]).find(x=>String(x.id)===contractId);check(contract,404,'계약서를 찾을 수 없습니다.');check(contract.signed===true,400,'체결 완료된 계약서만 확인 링크를 만들 수 있습니다.');const expires=Date.now()+365*86400000,token=random();run('INSERT OR REPLACE INTO contract_links(token_hash,user_id,contract_id,expires,created,last_view) VALUES(?,?,?,?,?,0)',hash(token),s.actor,contractId,expires,Date.now());
+  documentTracking.create({actor:s.actor,kind:'contract',variant:'completed',sourceId:contractId,sourceType:'contract',customer:contract.customer,phoneMask:phoneMask(contract.phone),amount:contract.amount,token,expires,status:'not_sent',signedAt:contract.signedAt,payload:publicContractPayload(s.actor,contract)});
+  return json(res,200,{ok:true,token,url:origin+'/contract/'+token,expiresAt:expires});
  }
  if(/^\/api\/public\/contract\/[A-Za-z0-9_-]{43}$/.test(p)&&m==='GET'){
   limit(req,'public-original:'+ip(req),120,600000);
   const original=contractOriginals.resolve(store,p.split('/').pop());
   if(original)return json(res,200,{ok:true,...original});
-  limit(req,'public-contract:'+ip(req),120,600000);const token=p.split('/').pop(),link=one('SELECT * FROM contract_links WHERE token_hash=?',hash(token));check(link,404,'계약서 링크를 찾을 수 없습니다.');check(link.expires>Date.now(),410,'계약서 링크가 만료되었습니다.');const row=one('SELECT body FROM snapshots WHERE user_id=?',link.user_id);check(row,404,'계약서를 찾을 수 없습니다.');const snap=open(row.body),contract=(snap.data?.contracts||[]).find(x=>String(x.id)===String(link.contract_id));check(contract&&contract.signed===true,404,'체결 완료된 계약서를 찾을 수 없습니다.');run('UPDATE contract_links SET last_view=? WHERE token_hash=?',Date.now(),link.token_hash);return json(res,200,{ok:true,...publicContractPayload(link.user_id,contract),linkExpiresAt:link.expires});
+  limit(req,'public-contract:'+ip(req),120,600000);const token=p.split('/').pop(),tracked=documentTracking.byToken(token);
+  if(tracked&&tracked.kind==='contract'&&tracked.variant==='completed'){
+   check(tracked.expires>Date.now(),410,'계약서 링크가 만료되었거나 사용할 수 없습니다.');check(one('SELECT status FROM users WHERE id=?',tracked.user_id)?.status==='active',410,'현재 사용할 수 없는 계약서입니다.');
+   const saved=documentTracking.metadata(tracked).payload;if(saved)return json(res,200,{ok:true,...saved,linkExpiresAt:tracked.expires});
+  }
+  const link=one('SELECT * FROM contract_links WHERE token_hash=?',hash(token));check(link,404,'계약서 링크를 찾을 수 없습니다.');check(link.expires>Date.now(),410,'계약서 링크가 만료되었습니다.');check(one('SELECT status FROM users WHERE id=?',link.user_id)?.status==='active',410,'현재 사용할 수 없는 계약서입니다.');const row=one('SELECT body FROM snapshots WHERE user_id=?',link.user_id);check(row,404,'계약서를 찾을 수 없습니다.');const snap=open(row.body),contract=(snap.data?.contracts||[]).find(x=>String(x.id)===String(link.contract_id));check(contract&&contract.signed===true,404,'체결 완료된 계약서를 찾을 수 없습니다.');return json(res,200,{ok:true,...publicContractPayload(link.user_id,contract),linkExpiresAt:link.expires});
  }
  if(/^\/api\/contracts\/[^/]+\/(statement|receipt)-link$/.test(p)&&m==='POST'){
   const session=getSession(req);writeGuard(req,session);
@@ -427,6 +546,7 @@ async function route(req,res){
   tx(()=>{
    run(`INSERT OR REPLACE INTO ${table}(token_hash,user_id,contract_id,expires,created,last_view) VALUES(?,?,?,?,?,0)`,tokenHash,session.actor,contractId,expires,now);
    paymentDocuments.archive(store,{token_hash:tokenHash,user_id:session.actor,expires},kind,payload,now);
+   documentTracking.create({actor:session.actor,kind,sourceId:contractId,sourceType:'contract',customer:contract.customer,phoneMask:phoneMask(contract.phone),amount:kind==='receipt'?payload.receipt.paidAmount:payload.statement.total,token,expires,status:'not_sent',payload});
   });
   log(session.actor,kind+'.public_link.create',contractId,{expires});
   return json(res,200,{ok:true,token,url:origin+'/'+kind+'/'+token,expiresAt:expires});
@@ -452,8 +572,7 @@ async function route(req,res){
    body[kind].issuedAt=new Date(link.created+9*3600000).toISOString().slice(0,10);
    return body;
   });
-  if(quoteLink)run('UPDATE quote_document_links SET last_view=? WHERE token_hash=?',Date.now(),tokenHash);
-  else if(contractLink)run(`UPDATE ${table} SET last_view=? WHERE token_hash=?`,Date.now(),tokenHash);
+  check(one('SELECT status FROM users WHERE id=?',link.user_id)?.status==='active',410,'현재 사용할 수 없는 문서입니다.');
   return json(res,200,{ok:true,...payload,linkExpiresAt:link.expires});
  }
  if(p==='/api/device/start'&&m==='POST'){
@@ -494,8 +613,10 @@ async function route(req,res){
   limit(req,'alimtalk-quote-minute:'+s.actor,3,60000);
   limit(req,'alimtalk-quote-day:'+s.actor,30,86400000);
   const info=memberQuoteSendInfo(s.actor,quoteId),ref='quote:'+quoteId;
-  const recent=one("SELECT created FROM alimtalk_logs WHERE actor=? AND kind='quote' AND target_ref=? AND status='accepted' ORDER BY created DESC LIMIT 1",s.actor,ref);
+  const recent=one("SELECT created FROM alimtalk_logs WHERE actor=? AND kind='quote' AND target_ref=? AND status IN ('accepted','unknown') ORDER BY created DESC LIMIT 1",s.actor,ref);
   check(!recent||Date.now()-recent.created>=600000,429,'같은 견적서에 대한 발송은 10분 후 다시 시도할 수 있습니다.');
+  const reservation=paymentDocuments.reserve(store,s.actor,'quote',ref);let providerStarted=false;
+  try{
   check(!!env.SOLAPI_TEMPLATE_QUOTE&&!!env.SOLAPI_PFID,503,'견적서 발송 템플릿 또는 채널 설정이 없습니다.');
   const templates=await templateInspector.sendable(alimtalkAuth),template=templates.find(t=>t.templateId===env.SOLAPI_TEMPLATE_QUOTE);
   check(template,503,'SOLAPI 발송 가능 목록에 견적서 안내 템플릿이 없습니다.');
@@ -508,14 +629,20 @@ async function route(req,res){
    variables:{'#{고객명}':info.customer,'#{업체명}':info.supplier,'#{견적금액}':info.finalAmount.toLocaleString('ko-KR'),'#{문서토큰}':token}
   }};
   run('INSERT OR REPLACE INTO quote_links(token_hash,user_id,quote_id,expires,created,last_view) VALUES(?,?,?,?,?,0)',hash(token),s.actor,quoteId,expires,Date.now());
+  const documentId=documentTracking.create({actor:s.actor,kind:'quote',sourceId:quoteId,customer:info.customer,phoneMask:phoneMask(info.to),recipient:info.to,amount:info.finalAmount,token,expires,payload:publicQuotePayload(s.actor,info.q)});
   let result;
+  providerStarted=true;
   try{result=await sendAlimtalk(message);}
   catch(e){result={ok:false,status:e.status||0,result:{error:e.status?text(e.message,150):'SOLAPI 요청을 완료하지 못했습니다.'}};}
-  if(!result.ok)run('DELETE FROM quote_links WHERE token_hash=?',hash(token));
-  const id=alimtalkResultLog(s.actor,'quote',ref,{to:info.to,phoneMask:phoneMask(info.to),templateId:message.templateId},result,result.ok?'accepted':'failed');
+  const outcome=paymentDocuments.outcome(result);
+  if(outcome==='failed')run('DELETE FROM quote_links WHERE token_hash=?',hash(token));
+  const id=alimtalkResultLog(s.actor,'quote',ref,{to:info.to,phoneMask:phoneMask(info.to),templateId:message.templateId},result,outcome);
+  documentTracking.complete(documentId,result,outcome,id);
+  paymentDocuments.finish(store,reservation,outcome);
   log(s.actor,'alimtalk.quote.send',quoteId,{accepted:result.ok});
-  return json(res,result.ok?200:502,{ok:result.ok,accepted:result.ok,requestId:id,
-   ...(result.ok?{notice:'SOLAPI 접수 성공입니다. 실제 수신 완료 여부는 발송내역에서 확인해 주세요.'}:{error:'SOLAPI 발송 요청이 실패했습니다. 실제 수신 여부와 발송내역을 확인해 주세요.'})});
+  return json(res,result.ok?200:502,{ok:result.ok,accepted:result.ok,status:outcome,requestId:id,
+   ...(result.ok?{notice:'SOLAPI 접수 성공입니다. 실제 수신 완료 여부는 발송내역에서 확인해 주세요.'}:{error:outcome==='unknown'?'발송 결과를 확인하지 못했습니다. 중복 발송을 막기 위해 10분간 재요청을 제한합니다. 문서센터에서 확인해 주세요.':'SOLAPI 발송 접수에 실패했습니다. 발송내역을 확인해 주세요.'})});
+  }catch(error){paymentDocuments.finish(store,reservation,providerStarted?'unknown':'failed');throw error;}
  }
  if(p==='/api/contract/sign-link'&&m==='POST'){
   const session=getSession(req);writeGuard(req,session);
@@ -553,7 +680,7 @@ async function route(req,res){
   const link=savedSignLink(session.actor,contractId,contract);
   if(!link)return json(res,200,{ok:true,exists:false,signed:false});
   const archived=contractOriginals.archived(store,session.actor,contractId,contract);
-  if(archived)return json(res,200,{ok:true,exists:true,signed:true,signatureName:archived.contract.signatureName,identityStatus:archived.contract.identityStatus,signedAt:archived.contract.signedAt});
+  if(archived){documentTracking.signed(session.actor,contractId,link.providerId,websign.fingerprint(contract,session.actor),archived.contract.signedAt);return json(res,200,{ok:true,exists:true,signed:true,signatureName:archived.contract.signatureName,identityStatus:archived.contract.identityStatus,signedAt:archived.contract.signedAt});}
   check(env.HIWON_SIGN_APP_KEY,503,'전자서명 서버 연결키가 설정되지 않았습니다.');
   let status;
   try{status=await websign.status(link.providerId,env.HIWON_SIGN_APP_KEY);}
@@ -561,6 +688,7 @@ async function route(req,res){
   if(status.signed){
    let signature;try{signature=await websign.originalSignature(link.signUrl);}catch{throw new HttpError(502,'서명 원본을 보관할 수 없어 완료 반영을 보류했습니다. 잠시 후 다시 확인해 주세요.');}
    contractOriginals.archive(store,session.actor,contract,status,signature);
+   documentTracking.signed(session.actor,contractId,link.providerId,websign.fingerprint(contract,session.actor),status.signedAt);
   }
   return json(res,200,{ok:true,exists:true,...status});
  }
@@ -582,9 +710,11 @@ async function route(req,res){
    limit(req,'doc-send-min:'+session.actor,3,60000);limit(req,'doc-send-day:'+session.actor,30,86400000);
    const available=await templateInspector.sendable(alimtalkAuth),template=available.find(x=>x.templateId===info.templateId);check(template,503,'승인 템플릿이 없습니다.');
    const token=random(),message=memberDocumentMessage(info,template,token),tokenHash=hash(token),now=Date.now(),expires=now+365*86400000;
+   let documentId;
    tx(()=>{
     run('INSERT INTO quote_document_links(token_hash,user_id,quote_id,kind,received_amount,created,expires,last_view) VALUES(?,?,?,?,?,?,?,0)',tokenHash,session.actor,quoteId,kind,info.receivedAmount,now,expires);
     paymentDocuments.archive(store,{token_hash:tokenHash,user_id:session.actor,expires},kind,publicQuoteDocumentPayload(session.actor,info.quote,kind,info.receivedAmount,now),now);
+    documentId=documentTracking.create({actor:session.actor,kind,sourceId:quoteId,customer:info.customer,phoneMask:info.phoneMask,recipient:info.recipient,amount:info.amount,token,expires,payload:publicQuoteDocumentPayload(session.actor,info.quote,kind,info.receivedAmount,now)},now);
    });
    providerStarted=true;
    let result,outcome;
@@ -598,7 +728,9 @@ async function route(req,res){
      run('DELETE FROM payment_document_archives WHERE token_hash=?',tokenHash);
     }
     paymentDocuments.finish(store,reservation,outcome);
-    return alimtalkResultLog(session.actor,kind,ref,info,result,outcome);
+    const id=alimtalkResultLog(session.actor,kind,ref,info,result,outcome);
+    documentTracking.complete(documentId,result,outcome,id);
+    return id;
    });
    log(session.actor,'alimtalk.document.send',quoteId,{kind,status:outcome});
    return json(res,result.ok?200:502,{ok:result.ok,accepted:result.ok,status:outcome,requestId,...(result.ok?{notice:'SOLAPI 접수 성공. 실제 수신 여부는 별도 확인해 주세요.'}:{error:outcome==='unknown'?'발송 결과를 확인하지 못했습니다. 중복 발송을 막기 위해 10분간 재요청을 제한합니다. 발송 내역을 먼저 확인해 주세요.':'알림톡 발송 접수 실패.'})});
@@ -611,6 +743,7 @@ async function route(req,res){
   const s=getSession(req);writeGuard(req,s);limit(req,'contract-original:'+s.actor,30,600000);
   const b=await body(req),contractId=text(b.contractId,100);check(contractId,400,'계약서 번호를 확인해 주세요.');
   const info=await completedContractSource(s.actor,contractId),link=contractOriginals.create(store,origin,info);
+  documentTracking.create({actor:s.actor,kind:'contract',variant:'completed',sourceType:'contract',sourceId:contractId,customer:info.contract.customer,phoneMask:phoneMask(info.recipient),amount:info.contract.amount,token:link.token,expires:link.expiresAt,status:'not_sent',signedAt:info.contract.signedAt,payload:{supplier:info.supplier,contract:info.contract,source:info.source,originalUrl:info.originalUrl}});
   log(s.actor,'contract.original.link',contractId,{source:info.source});
   return json(res,200,{ok:true,contractId,url:link.url,expiresAt:link.expiresAt});
  }
@@ -624,21 +757,26 @@ async function route(req,res){
  if(p==='/api/alimtalk/customer/contract/completed/send'&&m==='POST'){
   const s=getSession(req);writeGuard(req,s);check(alimtalkSendingAllowed('user'),503,'회원 알림톡 발송 설정이 꺼져 있습니다.');
   const b=await body(req),contractId=text(b.contractId,100);check(b.confirm===true&&contractId,400,'원본 발송 전 고객과 계약서를 확인해 주세요.');
-  const ref='contract:'+contractId,last=one("SELECT created FROM alimtalk_logs WHERE actor=? AND kind='contractDone' AND target_ref=? AND status='accepted' ORDER BY created DESC LIMIT 1",s.actor,ref);
+  const ref='contract:'+contractId,last=one("SELECT created FROM alimtalk_logs WHERE actor=? AND kind='contractDone' AND target_ref=? AND status IN ('accepted','unknown') ORDER BY created DESC LIMIT 1",s.actor,ref);
   check(!last||Date.now()-last.created>=600000,429,'같은 계약 원본은 10분 후 다시 보낼 수 있습니다.');
   const inFlightKey=s.actor+':'+contractId;check(!completedSendsInFlight.has(inFlightKey),429,'이 계약 원본의 발송을 처리 중입니다. 잠시 기다려 주세요.');
   limit(req,'customer-alim-minute:'+s.actor,3,60000);limit(req,'customer-alim-day:'+s.actor,30,86400000);
+  const reservation=paymentDocuments.reserve(store,s.actor,'contractDone',ref);let providerStarted=false;
   completedSendsInFlight.add(inFlightKey);
   try{
   const info=await completedContractSource(s.actor,contractId),template=await completedContractTemplate(info),link=contractOriginals.create(store,origin,info);
   const message=contractOriginals.message(info,template,link.token,origin);
-  let result;try{result=await sendAlimtalk(message);}catch(e){result={ok:false,status:e.status||0,result:{error:e.status?e.message:'외부 발송 서비스 연결 실패'}};}
-  if(!result.ok)run('DELETE FROM signed_contract_links WHERE token_hash=?',hash(link.token));
-  const requestId=alimtalkResultLog(s.actor,'contractDone',ref,message,result,result.ok?'accepted':'failed');
+  const documentId=documentTracking.create({actor:s.actor,kind:'contract',variant:'completed',sourceType:'contract',sourceId:contractId,customer:info.contract.customer,phoneMask:phoneMask(info.recipient),recipient:info.recipient,amount:info.contract.amount,token:link.token,expires:link.expiresAt,signedAt:info.contract.signedAt,payload:{supplier:info.supplier,contract:info.contract,source:info.source,originalUrl:info.originalUrl}});
+  let result;providerStarted=true;try{result=await sendAlimtalk(message);}catch(e){result={ok:false,status:e.status||0,result:{error:e.status?e.message:'외부 발송 서비스 연결 실패'}};}
+  const outcome=paymentDocuments.outcome(result);
+  if(outcome==='failed')run('DELETE FROM signed_contract_links WHERE token_hash=?',hash(link.token));
+  const requestId=alimtalkResultLog(s.actor,'contractDone',ref,message,result,outcome);
+  documentTracking.complete(documentId,result,outcome,requestId);
+  paymentDocuments.finish(store,reservation,outcome);
   log(s.actor,'alimtalk.contract.original.send',contractId,{accepted:result.ok,source:info.source});
   const failure=templateInspector.failureSummary(result);
-  return json(res,result.ok?200:502,{ok:result.ok,accepted:result.ok,requestId,...(result.ok?{notice:'체결 원본 알림톡 발송 요청이 접수됐습니다.'}:{error:'원본 알림톡 접수 실패'+(failure.providerCode?' ('+failure.providerCode+')':'')+' · '+failure.providerError})});
-  }finally{completedSendsInFlight.delete(inFlightKey);}
+  return json(res,result.ok?200:502,{ok:result.ok,accepted:result.ok,status:outcome,requestId,...(result.ok?{notice:'체결 원본 알림톡 발송 요청이 접수됐습니다.'}:{error:outcome==='unknown'?'발송 결과를 확인하지 못했습니다. 중복 발송을 막기 위해 10분간 재요청을 제한합니다. 문서센터에서 확인해 주세요.':'원본 알림톡 접수 실패'+(failure.providerCode?' ('+failure.providerCode+')':'')+' · '+failure.providerError})});
+  }catch(error){paymentDocuments.finish(store,reservation,providerStarted?'unknown':'failed');throw error;}finally{completedSendsInFlight.delete(inFlightKey);}
  }
  if(p==='/api/alimtalk/customer/contract/preflight'&&m==='POST'){
   const session=getSession(req);writeGuard(req,session);limit(req,'alimtalk-sign-preflight:'+session.actor,25,600000);
@@ -679,17 +817,29 @@ async function route(req,res){
   limit(req,'customer-alim-minute:'+s.actor,3,60000);limit(req,'customer-alim-day:'+s.actor,30,86400000);
   const data=userAlimtalkRequest(s.actor,b);
   const ref='contract:'+data.contractId;
-  const last=one("SELECT created FROM alimtalk_logs WHERE actor=? AND kind=? AND target_ref=? AND status='accepted' ORDER BY created DESC LIMIT 1",s.actor,data.kind,ref);
+  const last=one("SELECT created FROM alimtalk_logs WHERE actor=? AND kind=? AND target_ref=? AND status IN ('accepted','unknown') ORDER BY created DESC LIMIT 1",s.actor,data.kind,ref);
   check(!last||Date.now()-last.created>=600000,429,'같은 계약에 대한 발송은 10분 후 다시 시도할 수 있습니다.');
-  let result;try{result=await sendAlimtalk(data);}catch(e){result={ok:false,status:e.status||0,result:{error:e.status?e.message:'외부 발송 서비스 연결 실패'}};}
-  const id=alimtalkResultLog(s.actor,data.kind,ref,data,result,result.ok?'accepted':'failed');
+  const reservation=paymentDocuments.reserve(store,s.actor,data.kind,ref);let providerStarted=false;
+  try{
+  let documentId;
+  if(data.kind==='contractSign'){
+   const shortToken=String(data.options.variables['#{서명링크}']||'').match(/\/s\/([A-Za-z0-9_-]{43})$/)?.[1];
+   const short=shortToken?one('SELECT * FROM sign_redirect_links WHERE token_hash=?',hash(shortToken)):null;check(short,409,'서명 요청 링크를 다시 준비해 주세요.');
+   const contract=userContract(s.actor,data.contractId);
+   documentId=documentTracking.create({actor:s.actor,kind:'contract',variant:'sign_request',publicKind:'sign',sourceType:'contract',sourceId:data.contractId,customer:contract.customer,phoneMask:data.phoneMask,recipient:data.to,amount:contract.amount,token:shortToken,expires:short.expires,signProviderId:short.provider_id,signPayloadHash:short.payload_hash});
+  }
+  let result;providerStarted=true;try{result=await sendAlimtalk(data);}catch(e){result={ok:false,status:e.status||0,result:{error:e.status?e.message:'외부 발송 서비스 연결 실패'}};}
+  const outcome=paymentDocuments.outcome(result),id=alimtalkResultLog(s.actor,data.kind,ref,data,result,outcome);
+  if(documentId)documentTracking.complete(documentId,result,outcome,id);
+  paymentDocuments.finish(store,reservation,outcome);
   log(s.actor,'alimtalk.customer.send',ref,{kind:data.kind,accepted:result.ok});
   const failure=templateInspector.failureSummary(result);
-  return json(res,result.ok?200:502,{ok:result.ok,requestId:id,accepted:result.ok,...(!result.ok?{error:'알림톡 접수 실패'+(failure.providerCode?' ('+failure.providerCode+')':'')+' · '+failure.providerError}:{}),notice:'SOLAPI 접수 결과이며 실제 수신 성공 여부는 발송내역 확인이 필요합니다.'});
+  return json(res,result.ok?200:502,{ok:result.ok,status:outcome,requestId:id,accepted:result.ok,...(!result.ok?{error:outcome==='unknown'?'발송 결과를 확인하지 못했습니다. 중복 발송을 막기 위해 10분간 재요청을 제한합니다. 문서센터에서 확인해 주세요.':'알림톡 접수 실패'+(failure.providerCode?' ('+failure.providerCode+')':'')+' · '+failure.providerError}:{}),notice:'SOLAPI 접수 결과이며 실제 수신 성공 여부는 발송내역 확인이 필요합니다.'});
+  }catch(error){paymentDocuments.finish(store,reservation,providerStarted?'unknown':'failed');throw error;}
  }
  if(p==='/api/alimtalk/customer/logs'&&m==='GET'){
   const s=getSession(req);
-  return json(res,200,{items:all("SELECT id,kind,target_ref,phone_mask,status,created FROM alimtalk_logs WHERE actor=? AND target_ref LIKE 'contract:%' ORDER BY created DESC LIMIT 50",s.actor)});
+  return json(res,200,{items:all("SELECT id,kind,target_ref,phone_mask,status,created FROM alimtalk_logs WHERE actor=? AND kind IN ('quote','contractSign','contractDone','statement','receipt','receivable') ORDER BY created DESC LIMIT 50",s.actor)});
  }
  if(p==='/api/dispatch'&&m==='POST'){const s=getSession(req);writeGuard(req,s);const b=await body(req),record=dispatchValidate(b);const id=crypto.randomUUID();run('INSERT INTO dispatch(id,user_id,body,status,created) VALUES(?,?,?,?,?)',id,s.actor,seal(record),'접수대기',Date.now());log(s.actor,'dispatch.create',id,{equipment:record.equipment,date:record.date});return json(res,201,{ok:true,id,status:'접수대기',record});}
  if(p==='/api/dispatch'&&m==='GET'){const s=getSession(req);return json(res,200,{items:all('SELECT * FROM dispatch WHERE user_id=? ORDER BY created DESC',s.actor).map(d=>({id:d.id,status:d.status,created:d.created,...open(d.body)}))});}
@@ -779,7 +929,7 @@ async function route(req,res){
  // Old shared-key and fixed PIN APIs are deliberately unavailable.
  if(p.startsWith('/api/')||p.startsWith('/auth/'))throw new HttpError(404,'지원하지 않는 경로입니다.');
  if(m!=='GET'&&m!=='HEAD')throw new HttpError(405,'지원하지 않는 요청입니다.');
- const pages={'/':'index.html','/connect':'index.html','/postcode':'postcode.html','/workspace':'workspace.html','/admin':'admin.html','/legal/terms':'terms.html','/legal/privacy':'privacy.html'};const publicQuotePage=/^\/quote\/[A-Za-z0-9_-]{43}$/.test(p)?'quote.html':null,publicContractPage=/^\/contract\/[A-Za-z0-9_-]{43}$/.test(p)?'contract.html':null,publicStatementPage=/^\/statement\/[A-Za-z0-9_-]{43}$/.test(p)?'statement.html':null,publicReceiptPage=/^\/receipt\/[A-Za-z0-9_-]{43}$/.test(p)?'receipt.html':null;const file=path.resolve(__dirname,'public',publicReceiptPage||publicStatementPage||publicContractPage||publicQuotePage||pages[p]||p.slice(1));
+ const pages={'/':'index.html','/connect':'index.html','/postcode':'postcode.html','/workspace':'workspace.html','/document-center':'workspace.html','/admin':'admin.html','/legal/terms':'terms.html','/legal/privacy':'privacy.html'};const publicQuotePage=/^\/quote\/[A-Za-z0-9_-]{43}$/.test(p)?'quote.html':null,publicContractPage=/^\/contract\/[A-Za-z0-9_-]{43}$/.test(p)?'contract.html':null,publicStatementPage=/^\/statement\/[A-Za-z0-9_-]{43}$/.test(p)?'statement.html':null,publicReceiptPage=/^\/receipt\/[A-Za-z0-9_-]{43}$/.test(p)?'receipt.html':null,publicSignPage=/^\/s\/[A-Za-z0-9_-]{43}$/.test(p)?'document-access.html':null;const file=path.resolve(__dirname,'public',publicSignPage||publicReceiptPage||publicStatementPage||publicContractPage||publicQuotePage||pages[p]||p.slice(1));
  check(file.startsWith(path.join(__dirname,'public')+path.sep)&&fs.existsSync(file)&&fs.statSync(file).isFile(),404,'페이지를 찾을 수 없습니다.');
  if(p==='/postcode'||p==='/postcode.html')res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self' 'unsafe-inline' https://t1.kakaocdn.net; style-src 'self' 'unsafe-inline'; frame-src https:; connect-src 'self' https:; img-src 'self' data: https:; font-src 'self' https:; frame-ancestors 'none'; base-uri 'none'; form-action 'none'");
   const types={'.html':'text/html; charset=utf-8','.css':'text/css; charset=utf-8','.js':'application/javascript; charset=utf-8','.svg':'image/svg+xml'};res.writeHead(200,{'Content-Type':types[path.extname(file)]||'application/octet-stream','Cache-Control':publicContractPage?'no-store':'no-cache'});if(m==='HEAD')return res.end();fs.createReadStream(file).pipe(res);
@@ -799,7 +949,11 @@ const server=http.createServer((req,res)=>{
  });
 });
 server.requestTimeout=20000;server.headersTimeout=10000;
-const cleanup=setInterval(()=>{const now=Date.now();for(const table of ['sessions','otp','rates','oauth','devices','quote_links','contract_links','statement_links','receipt_links','quote_document_links','payment_document_archives','sign_redirect_links','signed_contract_links'])run(`DELETE FROM ${table} WHERE expires<?`,now-3600000);},600000);cleanup.unref();
+const cleanup=setInterval(()=>{const now=Date.now();for(const table of ['sessions','otp','rates','oauth','devices','quote_links','contract_links','statement_links','receipt_links','quote_document_links','payment_document_archives','sign_redirect_links','signed_contract_links','document_open_challenges'])run(`DELETE FROM ${table} WHERE expires<?`,now-3600000);run('DELETE FROM document_open_visitors WHERE last_at<?',now-30*86400000);},600000);cleanup.unref();
+// This worker only reads provider status. It never submits messages or creates
+// a new signing request, and is off in demo/test processes.
+const documentPoller=!local&&env.DOCUMENT_TRACKING_POLL_ENABLED!=='false'?setInterval(()=>{documentTracking.backfill(100);refreshDocumentTracking().catch(()=>{});},60000):null;
+if(documentPoller)documentPoller.unref();
 server.listen(port,host,()=>console.log(`ONEBIZ V2 ${mode} listening ${host}:${port}`));
 // Only safe boolean diagnostics: never log credential values or raw hashes.
 if(!local){
