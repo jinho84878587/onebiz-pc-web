@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 35
     env:
-      GRADLE_USER_HOME: ${{ runner.temp }}/onebiz-gradle-home
+      GRADLE_USER_HOME: /tmp/onebiz-gradle-home
     steps:
       - name: Set up Java 17
         uses: actions/setup-java@v4
