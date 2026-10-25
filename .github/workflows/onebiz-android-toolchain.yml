@@ -1,0 +1,203 @@
+name: ONEBIZ 4.5.68 isolated Android toolchain
+
+on:
+  push:
+    branches: ['build/onebiz-4.5.68-toolchain']
+    paths: ['.github/workflows/onebiz-android-toolchain.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: onebiz-4568-toolchain
+  cancel-in-progress: false
+
+jobs:
+  prepare-toolchain:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    env:
+      GRADLE_USER_HOME: ${{ runner.temp }}/onebiz-gradle-home
+    steps:
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Download pinned Gradle and install isolated Android SDK
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/onebiz-tools" "$RUNNER_TEMP/onebiz-export"
+          cd "$RUNNER_TEMP/onebiz-tools"
+          curl -fL --retry 3 https://services.gradle.org/distributions/gradle-8.11.1-bin.zip -o gradle-8.11.1-bin.zip
+          echo 'f397b287023acdba1e9f6fc5ea72d22dd63669d59ed4a289a29b1a76eee151c6  gradle-8.11.1-bin.zip' | sha256sum -c -
+          unzip -q gradle-8.11.1-bin.zip
+          echo "$RUNNER_TEMP/onebiz-tools/gradle-8.11.1/bin" >> "$GITHUB_PATH"
+          MANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          SDK="$RUNNER_TEMP/onebiz-sdk"
+          mkdir -p "$SDK"
+          yes | "$MANAGER" --sdk_root="$SDK" --licenses >/dev/null 2>&1 || true
+          "$MANAGER" --sdk_root="$SDK" 'platforms;android-36' 'build-tools;35.0.0' 'platform-tools'
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$SDK" >> "$GITHUB_ENV"
+          cp gradle-8.11.1-bin.zip "$RUNNER_TEMP/onebiz-export/"
+      - name: Resolve exact dependency set using a disposable non-production probe
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROBE="$RUNNER_TEMP/onebiz-probe"
+          mkdir -p "$PROBE/app/src/main/java/build/probe/onebiz" "$PROBE/app/src/test/java/build/probe/onebiz"
+          cd "$PROBE"
+          cat > settings.gradle.kts <<'EOF'
+          pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "ONEBIZ_Toolchain_Probe"
+          include(":app")
+          EOF
+          cat > build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application") version "8.9.1" apply false
+              id("org.jetbrains.kotlin.android") version "2.0.21" apply false
+              id("org.jetbrains.kotlin.plugin.compose") version "2.0.21" apply false
+          }
+          EOF
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx3g -Dfile.encoding=UTF-8
+          android.useAndroidX=true
+          android.enableJetifier=true
+          kotlin.compiler.execution.strategy=in-process
+          EOF
+          cat > app/build.gradle.kts <<'EOF'
+          plugins {
+              id("com.android.application")
+              id("org.jetbrains.kotlin.android")
+              id("org.jetbrains.kotlin.plugin.compose")
+          }
+          android {
+              namespace = "build.probe.onebiz"
+              compileSdk = 36
+              defaultConfig {
+                  applicationId = "build.probe.onebiz"
+                  minSdk = 26
+                  targetSdk = 36
+                  versionCode = 1
+                  versionName = "probe-only-not-onebiz"
+              }
+              buildFeatures { compose = true; buildConfig = true }
+              buildTypes {
+                  getByName("release") {
+                      isMinifyEnabled = true
+                      proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+                      ndk { debugSymbolLevel = "SYMBOL_TABLE" }
+                  }
+              }
+              compileOptions {
+                  sourceCompatibility = JavaVersion.VERSION_17
+                  targetCompatibility = JavaVersion.VERSION_17
+              }
+              kotlinOptions { jvmTarget = "17" }
+          }
+          dependencies {
+              implementation(platform("androidx.compose:compose-bom:2024.12.01"))
+              implementation("androidx.activity:activity-compose:1.10.0")
+              implementation("androidx.compose.material3:material3")
+              implementation("androidx.compose.material:material-icons-extended")
+              implementation("androidx.compose.ui:ui")
+              implementation("androidx.compose.ui:ui-tooling-preview")
+              implementation("androidx.core:core-ktx:1.15.0")
+              implementation("androidx.browser:browser:1.8.0")
+              implementation("androidx.lifecycle:lifecycle-runtime-compose:2.8.7")
+              implementation("androidx.work:work-runtime-ktx:2.10.5")
+              implementation("com.google.mlkit:text-recognition-korean:16.0.1")
+              implementation("com.google.zxing:core:3.5.3")
+              debugImplementation("androidx.compose.ui:ui-tooling")
+              testImplementation("junit:junit:4.13.2")
+              testImplementation("org.json:json:20240303")
+          }
+          EOF
+          : > app/proguard-rules.pro
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+            <application android:label="Toolchain probe" android:allowBackup="false" android:supportsRtl="true">
+              <activity android:name=".ProbeActivity" android:exported="false" />
+            </application>
+          </manifest>
+          EOF
+          cat > app/src/main/java/build/probe/onebiz/ProbeActivity.kt <<'EOF'
+          package build.probe.onebiz
+          import android.os.Bundle
+          import androidx.activity.ComponentActivity
+          import androidx.activity.compose.setContent
+          import androidx.compose.material3.Text
+          class ProbeActivity : ComponentActivity() {
+              override fun onCreate(state: Bundle?) {
+                  super.onCreate(state)
+                  setContent { Text("Dependency resolution probe. Not ONEBIZ.") }
+              }
+          }
+          EOF
+          cat > app/src/test/java/build/probe/onebiz/ProbeTest.kt <<'EOF'
+          package build.probe.onebiz
+          import org.junit.Test
+          import org.junit.Assert.assertEquals
+          import org.json.JSONObject
+          class ProbeTest {
+              @Test fun dependencyProbe() { assertEquals(1, JSONObject("{\"n\":1}").getInt("n")) }
+          }
+          EOF
+          gradle --no-daemon --no-parallel --max-workers=2 --console=plain testDebugUnitTest assembleDebug lintDebug bundleRelease 2>&1 | tee "$RUNNER_TEMP/onebiz-export/probe-build.log"
+          echo 'This is only a dependency probe; it does not validate or build ONEBIZ application sources.' > "$RUNNER_TEMP/onebiz-export/README.txt"
+      - name: Package SDK and dependency cache without credentials or production files
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/onebiz-export"
+          if [ -d "$RUNNER_TEMP/onebiz-sdk/platforms" ]; then
+            tar -czf "$RUNNER_TEMP/onebiz-export/android-sdk.tar.gz" -C "$RUNNER_TEMP/onebiz-sdk" --exclude='.temp' --exclude='.knownPackages' .
+          fi
+          if [ -d "$GRADLE_USER_HOME/caches/modules-2" ]; then
+            tar -czf "$RUNNER_TEMP/onebiz-export/gradle-modules.tar.gz" -C "$GRADLE_USER_HOME" --exclude='*.lock' caches/modules-2
+          fi
+          cd "$RUNNER_TEMP/onebiz-export"
+          find . -maxdepth 1 -type f ! -name SHA256SUMS -print0 | sort -z | xargs -0 sha256sum > SHA256SUMS
+          ls -lh
+      - name: Export Gradle distribution
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onebiz-gradle-8.11.1
+          path: ${{ runner.temp }}/onebiz-export/gradle-8.11.1-bin.zip
+          retention-days: 1
+          compression-level: 0
+      - name: Export isolated SDK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onebiz-android-sdk-36
+          path: ${{ runner.temp }}/onebiz-export/android-sdk.tar.gz
+          retention-days: 1
+          compression-level: 0
+      - name: Export resolved public Maven dependencies
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onebiz-gradle-modules
+          path: ${{ runner.temp }}/onebiz-export/gradle-modules.tar.gz
+          retention-days: 1
+          compression-level: 0
+      - name: Export probe logs and checksums
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: onebiz-toolchain-evidence
+          path: |
+            ${{ runner.temp }}/onebiz-export/probe-build.log
+            ${{ runner.temp }}/onebiz-export/SHA256SUMS
+            ${{ runner.temp }}/onebiz-export/README.txt
+          retention-days: 1
