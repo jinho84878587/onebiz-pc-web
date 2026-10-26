@@ -1,7 +1,7 @@
 'use strict';
 const http=require('node:http'),fs=require('node:fs'),path=require('node:path'),crypto=require('node:crypto');
 const {createStore}=require('./lib/store');
-const {HttpError,check,random,equal,sha,phone,text,passwordHash,totp}=require('./lib/security');
+const {HttpError,check,random,equal,sha,phone,text,passwordHash}=require('./lib/security');
 const provider=require('./lib/providers');
 const templateInspector=require('./lib/solapi-template-inspector');
 const websign=require('./lib/websign-bridge');
@@ -25,7 +25,7 @@ const policyVersion='2026-09-18-draft';
 function json(res,status,body){res.writeHead(status,{'Content-Type':'application/json; charset=utf-8','Cache-Control':'no-store'});res.end(JSON.stringify(body));}
 function redirect(res,to){res.writeHead(303,{Location:to,'Cache-Control':'no-store'});res.end();}
 function cookie(req,key){const part=(req.headers.cookie||'').split(';').map(x=>x.trim()).find(x=>x.startsWith(key+'='));return part?part.slice(key.length+1):'';}
-function setCookie(res,key,value,maxAge=43200){const values=res.getHeader('Set-Cookie')||[];res.setHeader('Set-Cookie',[...values,`${key}=${value}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${maxAge}${local?'':'; Secure'}`]);}
+function setCookie(res,key,value,maxAge=43200){const values=res.getHeader('Set-Cookie')||[],sameSite=key==='ob_admin'?'Strict':'Lax';res.setHeader('Set-Cookie',[...values,`${key}=${value}; Path=/; HttpOnly; SameSite=${sameSite}; Max-Age=${maxAge}${local?'':'; Secure'}`]);}
 async function body(req){check((req.headers['content-type']||'').startsWith('application/json'),415,'JSON 요청이 필요합니다.');let n=0;const chunks=[];for await(const chunk of req){n+=chunk.length;check(n<=2*1024*1024,413,'요청 데이터가 너무 큽니다.');chunks.push(chunk);}try{const b=JSON.parse(Buffer.concat(chunks).toString()||'{}');check(b&&typeof b==='object'&&!Array.isArray(b),400,'객체가 필요합니다.');return b;}catch(e){if(e instanceof HttpError)throw e;throw new HttpError(400,'JSON 형식을 확인해 주세요.');}}
 function ip(req){return env.TRUST_PROXY==='1'?String(req.headers['x-forwarded-for']||req.socket.remoteAddress).split(',').pop().trim():req.socket.remoteAddress;}
 function limit(req,k,n,ms){check(rate(k,n,ms),429,'요청이 많습니다. 잠시 후 다시 시도해 주세요.');}
@@ -35,7 +35,7 @@ function writeGuard(req,session){
  else check(req.headers['x-onebiz-client']==='android',403,'요청 출처를 확인해 주세요.');
  if(session&&!session.bearer)check(equal(req.headers['x-csrf-token']||'',session.csrf),403,'화면을 새로고침한 후 다시 시도해 주세요.');
 }
-const androidSessionTtl=30*86400000;
+const androidSessionTtl=30*86400000,adminRememberTtl=30*86400000;
 function getSession(req,kind='user',optional=false){
  const bearer=(req.headers.authorization||'').startsWith('Bearer '),token=bearer?req.headers.authorization.slice(7):cookie(req,kind==='admin'?'ob_admin':'ob_user');
  const tokenHash=token?hash(token):'',s=token?one('SELECT * FROM sessions WHERE hash=? AND kind=? AND expires>?',tokenHash,kind,Date.now()):null;
@@ -43,9 +43,9 @@ function getSession(req,kind='user',optional=false){
  if(kind==='user'){const u=one('SELECT status FROM users WHERE id=?',s.actor);check(u&&u.status==='active',403,'이 계정은 이용이 제한되어 있습니다.');if(bearer)run('UPDATE sessions SET expires=? WHERE hash=?',Date.now()+androidSessionTtl,tokenHash);}
  return {...s,bearer};
 }
-function sessionCreate(req,res,id,kind='user',role='owner',asBearer=false){
- const token=random(),csrf=random(),now=Date.now(),ttl=kind==='admin'?3600000:(asBearer?androidSessionTtl:43200000);run('INSERT INTO sessions VALUES(?,?,?,?,?,?,?)',hash(token),id,kind,role,csrf,now+ttl,now);
- if(!asBearer)setCookie(res,kind==='admin'?'ob_admin':'ob_user',token,kind==='admin'?3600:43200);
+function sessionCreate(req,res,id,kind='user',role='owner',asBearer=false,keepAdminSignedIn=false){
+ const token=random(),csrf=random(),now=Date.now(),ttl=kind==='admin'?(keepAdminSignedIn?adminRememberTtl:3600000):(asBearer?androidSessionTtl:43200000);run('INSERT INTO sessions VALUES(?,?,?,?,?,?,?)',hash(token),id,kind,role,csrf,now+ttl,now);
+ if(!asBearer)setCookie(res,kind==='admin'?'ob_admin':'ob_user',token,kind==='admin'?Math.floor(ttl/1000):43200);
  return asBearer?{token,expiresAt:now+ttl}:{csrf};
 }
 function consent(b){check(b.terms===true&&b.privacy===true,400,'필수 약관과 개인정보 안내를 확인해 주세요.');return {terms:true,privacy:true,marketing:b.marketing===true,version:policyVersion,at:Date.now()};}
@@ -847,8 +847,7 @@ async function route(req,res){
  if(p==='/api/admin/login'&&m==='POST'){
   writeGuard(req);limit(req,'admin-ip:'+ip(req),10,900000);const b=await body(req),username=text(b.username,120).toLowerCase();limit(req,'admin-name:'+username,10,900000);const a=one('SELECT * FROM admins WHERE username=?',username);
   const calculated=passwordHash(String(b.password||''),a?.salt||'dummy-salt');check(a&&equal(calculated,a.password),401,'관리자 인증에 실패했습니다.');
-  if(!local||a.totp){check(a.totp,403,'관리자 2단계 인증 설정이 필요합니다.');const step=Math.floor(Date.now()/30000);let accepted=-1;for(const x of [step-1,step,step+1])if(x>a.last_step&&equal(totp(open(a.totp),x),String(b.code||'')))accepted=x;check(accepted>=0,401,'2단계 인증번호를 확인해 주세요.');run('UPDATE admins SET last_step=? WHERE id=?',accepted,a.id);}
-  log(a.id,'admin.login',a.id);return json(res,200,{ok:true,...sessionCreate(req,res,a.id,'admin',a.role)});
+  const keepSignedIn=b.keepSignedIn===true;log(a.id,'admin.login',a.id,{keepSignedIn});return json(res,200,{ok:true,...sessionCreate(req,res,a.id,'admin',a.role,false,keepSignedIn)});
  }
  if(p==='/api/admin/me'&&m==='GET'){const s=mustAdmin(req);return json(res,200,{csrf:s.csrf,role:s.role,username:one('SELECT username FROM admins WHERE id=?',s.actor).username});}
  if(p==='/api/admin/logout'&&m==='POST'){const s=mustAdmin(req);writeGuard(req,s);run('DELETE FROM sessions WHERE hash=?',s.hash);setCookie(res,'ob_admin','',0);return json(res,200,{ok:true});}
