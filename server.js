@@ -10,6 +10,8 @@ const contractOriginals=require('./lib/contract-originals');
 const paymentDocuments=require('./lib/payment-documents');
 const quotePricing=require('./lib/quote-pricing');
 const {createDocumentRegistry}=require('./lib/no-login-document-registry');
+const {createGuestDocumentVault}=require('./lib/no-login-document-vault');
+const {createActionGate}=require('./lib/no-login-action-gate');
 const {createTracking,automatedRequest}=require('./lib/document-tracking');
 const env=process.env,mode=env.APP_MODE||'production',demo=mode==='demo',test=mode==='test',local=demo||test;
 check(['production','demo','test'].includes(mode),500,'Invalid APP_MODE');
@@ -21,6 +23,9 @@ const store=createStore(env.DATA_FILE||path.join(__dirname,'data',local?'demo.sq
 const {one,all,run,tx,log,rate,hash,seal,open}=store;
 // Isolated local/test-only prototype: no paid services or guest HTTP access in production.
 const guestDevRegistry=local&&env.ONEBIZ_GUEST_DOCUMENT_DEV_API==='true'?createDocumentRegistry(store):null;
+const guestDevVault=guestDevRegistry?createGuestDocumentVault(store,guestDevRegistry):null;
+// Mock provider only: never calls SOLAPI or WebSign, even when guest dev API is enabled.
+const guestDevActionGate=guestDevRegistry?createActionGate(store,guestDevRegistry,id=>guestDevVault.loadForAction(id),async()=>({state:'accepted'})):null;
 const documentTracking=createTracking(store,origin,{providerConfigured:!!(env.SOLAPI_API_KEY&&env.SOLAPI_API_SECRET)});
 documentTracking.backfill();
 documentTracking.recoverPending();
@@ -410,6 +415,15 @@ async function route(req,res){
   if(action==='register'){
    const result=guestDevRegistry.register({secret:b.secret,fingerprint:b.fingerprint});
    return json(res,201,{ok:true,...result});
+  }
+  if(action==='document'){
+   const result=guestDevVault.save({ownerSecret:b.ownerSecret,contract:b.contract,consent:b.consent===true});
+   return json(res,201,{ok:true,...result});
+  }
+  if(action==='dispatch-test'){
+   check(['alimtalk.send','sign.request'].includes(b.scope),400,'테스트 가능한 기능을 확인해 주세요.');
+   const result=await guestDevActionGate.execute({documentId:b.documentId,token:b.token,scope:b.scope});
+   return json(res,200,{ok:result.ok,dryRun:true,...result});
   }
   if(action==='grant'){
    check(['document.read','document.export','sign.request','sign.status','alimtalk.send','alimtalk.status'].includes(b.scope),400,'권한 종류를 확인해 주세요.');
