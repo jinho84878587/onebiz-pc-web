@@ -1,0 +1,32 @@
+name: No-login change verification
+
+on:
+  push:
+    branches:
+      - feature/no-login-local-documents
+  pull_request:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verification:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.16.0'
+      - name: Syntax validation
+        run: |
+          node --check server.js
+          node --check lib/no-login-grants.js
+          node --check tests/no-login-grants.test.js
+      - name: Account-free grant unit tests
+        run: node --test tests/no-login-grants.test.js
+      - name: Existing repository regression tests
+        run: npm test
