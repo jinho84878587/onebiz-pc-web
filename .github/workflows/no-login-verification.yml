@@ -29,6 +29,7 @@ jobs:
           node --check lib/no-login-document-registry.js
           node --check lib/no-login-action-gate.js
           node --check lib/no-login-document-vault.js
+          node --check lib/no-login-websign-adapter.js
           node --check tests/no-login-grants.test.js
       - name: Account-free grant unit tests
         run: node --test tests/no-login-grants.test.js
