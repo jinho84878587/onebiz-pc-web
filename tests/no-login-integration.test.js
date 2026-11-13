@@ -17,9 +17,10 @@ function setup(){
  const signUrl='https://hiwon-websign-server.onrender.com/sign/ob-'+'a'.repeat(40);let websignCalls=0,solapiCalls=0;
  const provider={createLink:async()=>{websignCalls++;return {providerId:'ob-'+'a'.repeat(40),signUrl}},verifyUrl:s=>{if(s!==signUrl)throw Error('wrong url');return s},status:async()=>({signed:true,signedAt:'2026-11-13',signatureName:'가상 고객',identityStatus:'confirmed'}),originalSignature:async()=> 'data:image/png;base64,'+Buffer.from('TESTPNG').toString('base64')};
  const web=createGuestWebsignAdapter(store,registry,provider,{appKey:'TEST-ONLY'});
- const alim=createGuestAlimtalkAdapter(store,provider,{preview:async({kind,to,variables})=>{
+ const shortUrl='https://onebiz-pc-web.onrender.com/s/'+'b'.repeat(43);
+ const alim=createGuestAlimtalkAdapter(store,provider,{makeShortLink:async()=>({url:shortUrl}),preview:async({kind,to,variables})=>{
   if(kind!=='contractSign'||to!=='01012345678'||!variables['서명링크']||variables['업체명']!=='하이원시스템')throw Error('invalid request');
-  return {kind,to,templateId:'mock-template-approved',options:{variables:{'#{서명링크}':signUrl}}};
+  return {kind,to,templateId:'mock-template-approved',options:{variables:{'#{서명링크}':shortUrl}}};
  },send:async()=>{solapiCalls++;return {ok:true,status:200}}});
  const gate=createActionGate(store,registry,id=>vault.loadForAction(id,now),async req=>req.scope==='sign.request'?web.dispatch(req):alim.dispatch(req));
  const send=async scope=>{const g=registry.issue({documentId:doc.documentId,ownerSecret:secret,scope,now,ttlMs:60000});return gate.execute({documentId:doc.documentId,token:g.token,scope,now});};
