@@ -49,6 +49,20 @@ test('local-only no-login document API: ownership, grants, edit/revoke and one-t
  assert.equal((await post('revoke',{documentId:registered.documentId,ownerSecret:secret})).status,200);
  const denied=await post('grant',{documentId:registered.documentId,ownerSecret:secret,scope:'sign.request',confirm:true});
  assert.equal(denied.status,403);
+ const isolatedOwner=crypto.randomBytes(32).toString('base64url');
+ const uploaded=await post('document',{ownerSecret:isolatedOwner,consent:true,
+  contract:{customer:'가상 고객',phone:'01012345678',item:'에어컨 시공',amount:4900000}});
+ assert.equal(uploaded.status,201);
+ const blocked=await post('grant',{documentId:uploaded.documentId,ownerSecret:crypto.randomBytes(32).toString('base64url'),
+  scope:'sign.request',confirm:true});
+ assert.equal(blocked.status,403);
+ const permission=await post('grant',{documentId:uploaded.documentId,ownerSecret:isolatedOwner,
+  scope:'sign.request',confirm:true});
+ assert.equal(permission.status,200);
+ const sent=await post('dispatch-test',{documentId:uploaded.documentId,scope:'sign.request',token:permission.token});
+ assert.equal(sent.ok,true);assert.equal(sent.dryRun,true);
+ const duplicate=await post('dispatch-test',{documentId:uploaded.documentId,scope:'sign.request',token:permission.token});
+ assert.equal(duplicate.ok,false);assert.equal(duplicate.code,'not_authorized');
 });
 test('guest API remains off by default in a local/test server', {timeout:20000},async t=>{
  const dir=fs.mkdtempSync(path.join(os.tmpdir(),'onebiz-guest-off-'));
