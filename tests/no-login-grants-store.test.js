@@ -59,10 +59,10 @@ test('revocation requires ownership approval',()=>{
  let canRevoke=false;
  const {db,grants}=fixture(a=>a.action==='revoke'?canRevoke:true);
  const {token}=grants.issue(args());
- assert.equal(grants.revoke({token}),false);
+ assert.equal(grants.revoke({token,documentId:doc}),false);
  assert.equal(grants.validate(check(token)),true);
  canRevoke=true;
- assert.equal(grants.revoke({token}),true);
+ assert.equal(grants.revoke({token,documentId:doc}),true);
  assert.equal(grants.validate(check(token)),false);
  assert.equal(grants.consume(check(token)),false);
  db.close();
