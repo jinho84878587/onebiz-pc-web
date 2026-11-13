@@ -20,7 +20,7 @@ function setup(){
  const web=createGuestWebsignAdapter(store,registry,provider,{appKey:'TEST-ONLY'});
  const short=createGuestSignShortLinks(store,registry,provider,'https://onebiz-pc-web.onrender.com');
  let lastShortToken='';
- const alim=createGuestAlimtalkAdapter(store,provider,{makeShortLink:async args=>{const result=short.makeForAction({...args,now});lastShortToken=result.token;return result;},preview:async({kind,to,variables})=>{
+ const alim=createGuestAlimtalkAdapter(store,provider,{publicOrigin:'https://onebiz-pc-web.onrender.com',makeShortLink:async args=>{const result=short.makeForAction({...args,now});lastShortToken=result.token;return result;},preview:async({kind,to,variables})=>{
   if(kind!=='contractSign'||to!=='01012345678'||!/^https:\/\/onebiz-pc-web\.onrender\.com\/s\/[A-Za-z0-9_-]{43}$/.test(variables['서명링크'])||variables['업체명']!=='하이원시스템')throw Error('invalid request');
   return {kind,to,templateId:'mock-template-approved',options:{variables:{'#{서명링크}':'https://onebiz-pc-web.onrender.com/s/'+lastShortToken}}};
  },send:async()=>{solapiCalls++;return {ok:true,status:200}}});
