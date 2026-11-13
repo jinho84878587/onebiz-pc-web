@@ -39,6 +39,7 @@ test('signed status is confirmed only after encrypted original archival',async()
  assert.equal(res.signed,true);assert.notEqual(f.registry.current(f.doc.documentId).frozen_at,null);
  assert.equal(f.adapter.originalForOwner({documentId:f.doc.documentId,ownerSecret:'bad'}),null);
  assert.match(f.adapter.originalForOwner({documentId:f.doc.documentId,ownerSecret:f.secret}).signatureDataUrl,/^data:image\/png/);
+ assert.equal(f.adapter.originalForOwner({documentId:f.doc.documentId,ownerSecret:f.secret}).contract.amount,4900000);
  assert.equal((await f.adapter.status({documentId:f.doc.documentId,ownerSecret:f.secret})).signed,true);
  assert.equal(f.statusCount(),1);f.db.close();
 });
