@@ -11,6 +11,8 @@ const paymentDocuments=require('./lib/payment-documents');
 const quotePricing=require('./lib/quote-pricing');
 const {createDocumentRegistry}=require('./lib/no-login-document-registry');
 const {createGuestDocumentVault}=require('./lib/no-login-document-vault');
+const {createGuestWebsignAdapter}=require('./lib/no-login-websign-adapter');
+const {createGuestSignShortLinks}=require('./lib/no-login-sign-short-links');
 const {createActionGate}=require('./lib/no-login-action-gate');
 const {createTracking,automatedRequest}=require('./lib/document-tracking');
 const env=process.env,mode=env.APP_MODE||'production',demo=mode==='demo',test=mode==='test',local=demo||test;
@@ -25,7 +27,19 @@ const {one,all,run,tx,log,rate,hash,seal,open}=store;
 const guestDevRegistry=local&&env.ONEBIZ_GUEST_DOCUMENT_DEV_API==='true'?createDocumentRegistry(store):null;
 const guestDevVault=guestDevRegistry?createGuestDocumentVault(store,guestDevRegistry):null;
 // Mock provider only: never calls SOLAPI or WebSign, even when guest dev API is enabled.
-const guestDevActionGate=guestDevRegistry?createActionGate(store,guestDevRegistry,id=>guestDevVault.loadForAction(id),async()=>({state:'accepted'})):null;
+// A local/test-only WebSign mock; never sends paid requests or talks to WebSign.
+const guestDevWebsign=guestDevRegistry?createGuestWebsignAdapter(store,guestDevRegistry,{
+ verifyUrl:websign.verifyUrl,
+ createLink:async (contract,docId)=>{
+  const id=websign.providerId(docId,contract.id,'development-only');
+  return {providerId:id,signUrl:websign.BASE+'/sign/'+id+'?token='+random()};
+ },
+ status:async()=>({signed:false}),
+ originalSignature:async()=>{throw new Error('모의 전자서명은 원본을 생성하지 않습니다.');}
+},{appKey:'local-mock'}):null;
+const guestDevShortLinks=guestDevRegistry?createGuestSignShortLinks(store,guestDevRegistry,websign,origin):null;
+const guestDevActionGate=guestDevRegistry?createActionGate(store,guestDevRegistry,id=>guestDevVault.loadForAction(id),
+ async args=>args.scope==='sign.request'?guestDevWebsign.dispatch(args):{state:'accepted'}):null;
 const documentTracking=createTracking(store,origin,{providerConfigured:!!(env.SOLAPI_API_KEY&&env.SOLAPI_API_SECRET)});
 documentTracking.backfill();
 documentTracking.recoverPending();
@@ -420,6 +434,11 @@ async function route(req,res){
    const result=guestDevVault.save({ownerSecret:b.ownerSecret,contract:b.contract,consent:b.consent===true});
    return json(res,201,{ok:true,...result});
   }
+  if(action==='short-link-test'){
+   check(guestDevRegistry.ownerCheck(b.documentId,b.ownerSecret),403,'문서 소유자 확인에 실패했습니다.');
+   const link=guestDevShortLinks.makeForOwner({documentId:b.documentId,ownerSecret:b.ownerSecret});
+   return json(res,200,{ok:true,url:link.url,expiresAt:link.expiresAt});
+  }
   if(action==='dispatch-test'){
    check(['alimtalk.send','sign.request'].includes(b.scope),400,'테스트 가능한 기능을 확인해 주세요.');
    const result=await guestDevActionGate.execute({documentId:b.documentId,token:b.token,scope:b.scope});
@@ -448,6 +467,19 @@ async function route(req,res){
   throw new HttpError(404,'지원하지 않는 개발용 요청입니다.');
  }
 
+ // The guest token path is enabled only in local/test mode and cannot override
+ // existing member links in a production server.
+ if(guestDevShortLinks&&/^\/s\/[A-Za-z0-9_-]{43}$/.test(p)&&(m==='GET'||m==='HEAD')){
+  const token=p.slice(3);
+  if(guestDevShortLinks.has(token)){
+   limit(req,'guest-short-open:'+ip(req),120,600000);
+   const target=guestDevShortLinks.resolve(token);
+   check(target,410,'서명 링크가 만료되었거나 계약 내용이 변경되었습니다.');
+   res.setHeader('Referrer-Policy','no-referrer');
+   res.setHeader('X-Robots-Tag','noindex, nofollow');
+   return redirect(res,target);
+  }
+ }
  if(/^\/(contract|s)\/[A-Za-z0-9_-]{43}$/.test(p)&&(m==='GET'||m==='HEAD')){
   limit(req,'public-document-landing:'+ip(req),120,600000);
   // Validate expiry/revocation without redirects or any open-state mutation.
