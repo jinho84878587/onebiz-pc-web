@@ -9,6 +9,7 @@ const signShortLinks=require('./lib/sign-short-links');
 const contractOriginals=require('./lib/contract-originals');
 const paymentDocuments=require('./lib/payment-documents');
 const quotePricing=require('./lib/quote-pricing');
+const {createDocumentRegistry}=require('./lib/no-login-document-registry');
 const {createTracking,automatedRequest}=require('./lib/document-tracking');
 const env=process.env,mode=env.APP_MODE||'production',demo=mode==='demo',test=mode==='test',local=demo||test;
 check(['production','demo','test'].includes(mode),500,'Invalid APP_MODE');
@@ -18,6 +19,8 @@ if(!local){check(origin.startsWith('https://'),500,'Production requires PUBLIC_O
 check(new URL(origin).origin===origin,500,'PUBLIC_ORIGIN must not contain a path or trailing slash.');
 const store=createStore(env.DATA_FILE||path.join(__dirname,'data',local?'demo.sqlite':'onebiz.sqlite'),env.DATA_KEY_HEX||(local?'11'.repeat(32):''));
 const {one,all,run,tx,log,rate,hash,seal,open}=store;
+// Isolated local/test-only prototype: no paid services or guest HTTP access in production.
+const guestDevRegistry=local&&env.ONEBIZ_GUEST_DOCUMENT_DEV_API==='true'?createDocumentRegistry(store):null;
 const documentTracking=createTracking(store,origin,{providerConfigured:!!(env.SOLAPI_API_KEY&&env.SOLAPI_API_SECRET)});
 documentTracking.backfill();
 documentTracking.recoverPending();
@@ -397,6 +400,40 @@ async function route(req,res){
  res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
  if(!local)res.setHeader('Strict-Transport-Security','max-age=31536000');
  if(p==='/health')return json(res,200,{ok:true,version:'2.0.0-dev.1',mode,documentCenter:true,documentCenterVersion:1});
+ // Local/test-only anonymous document capability API. Never sends SOLAPI or WebSign requests.
+ if(p.startsWith('/api/guest-dev/')){
+  check(guestDevRegistry && local,404,'개발용 기능이 비활성화되어 있습니다.');
+  check(m==='POST',405,'POST 요청만 허용합니다.');
+  writeGuard(req);
+  limit(req,'guest-dev:'+ip(req),40,600000);
+  const b=await body(req),action=p.slice('/api/guest-dev/'.length);
+  if(action==='register'){
+   const result=guestDevRegistry.register({secret:b.secret,fingerprint:b.fingerprint});
+   return json(res,201,{ok:true,...result});
+  }
+  if(action==='grant'){
+   check(['document.read','document.export','sign.request','sign.status','alimtalk.send','alimtalk.status'].includes(b.scope),400,'권한 종류를 확인해 주세요.');
+   if(['sign.request','alimtalk.send'].includes(b.scope))check(b.confirm===true,400,'발송 확인이 필요합니다.');
+   check(guestDevRegistry.ownerCheck(b.documentId,b.ownerSecret),403,'문서 소유자 확인에 실패했습니다.');
+   return json(res,200,{ok:true,...guestDevRegistry.issue({documentId:b.documentId,ownerSecret:b.ownerSecret,scope:b.scope})});
+  }
+  if(action==='validate'){
+   return json(res,200,{ok:true,valid:guestDevRegistry.validate({documentId:b.documentId,token:b.token,scope:b.scope})});
+  }
+  if(action==='rotate'){
+   check(guestDevRegistry.rotate({documentId:b.documentId,secret:b.ownerSecret,expectedFingerprint:b.expectedFingerprint,nextFingerprint:b.nextFingerprint}),409,'문서 변경 권한이 없거나 내용이 일치하지 않습니다.');
+   return json(res,200,{ok:true});
+  }
+  if(action==='revoke'){
+   check(guestDevRegistry.revokeDocument({documentId:b.documentId,secret:b.ownerSecret}),403,'문서 철회 권한이 없습니다.');
+   return json(res,200,{ok:true});
+  }
+  if(action==='consume-test' && mode==='test'){
+   return json(res,200,{ok:true,consumed:guestDevRegistry.consume({documentId:b.documentId,token:b.token,scope:b.scope})});
+  }
+  throw new HttpError(404,'지원하지 않는 개발용 요청입니다.');
+ }
+
  if(/^\/(contract|s)\/[A-Za-z0-9_-]{43}$/.test(p)&&(m==='GET'||m==='HEAD')){
   limit(req,'public-document-landing:'+ip(req),120,600000);
   // Validate expiry/revocation without redirects or any open-state mutation.
