@@ -18,7 +18,8 @@ function fixture({link=true,badPreview=false,sendResult={ok:true,status:200}}={}
  if(link)store.run('INSERT INTO no_login_websign_links(document_id,sign_url,fingerprint) VALUES(?,?,?)',d.documentId,seal(signUrl),d.fingerprint);
  let sendCalls=0,previewCalls=0;
  const preview=async x=>{previewCalls++;return {kind:'contractSign',to:badPreview?'01099998888':x.to,templateId:'fake-approved-template',options:{variables:{'#{서명링크}':signUrl}}};};
- const bridge=createGuestAlimtalkAdapter(store,{verifyUrl:u=>{if(u!==signUrl)throw Error('bad url');return u}},{preview,send:async()=>{sendCalls++;return sendResult}});
+ const shortUrl='https://onebiz-pc-web.onrender.com/s/'+'x'.repeat(43);
+ const bridge=createGuestAlimtalkAdapter(store,{verifyUrl:u=>{if(u!==signUrl)throw Error('bad url');return u}},{preview,send:async()=>{sendCalls++;return sendResult},makeShortLink:async()=>({url:shortUrl})});
  const gate=createActionGate(store,registry,id=>vault.loadForAction(id,now),args=>bridge.dispatch(args));
  const run=async()=>{const g=registry.issue({documentId:d.documentId,ownerSecret:secret,scope:'alimtalk.send',now,ttlMs:60000});return gate.execute({documentId:d.documentId,token:g.token,scope:'alimtalk.send',now});};
  return {db,bridge,registry,vault,secret,docId:d.documentId,run,sendCalls:()=>sendCalls,previewCalls:()=>previewCalls};
