@@ -61,6 +61,11 @@ test('local-only no-login document API: ownership, grants, edit/revoke and one-t
  assert.equal(permission.status,200);
  const sent=await post('dispatch-test',{documentId:uploaded.documentId,scope:'sign.request',token:permission.token});
  assert.equal(sent.ok,true);assert.equal(sent.dryRun,true);
+ const short=await post('short-link-test',{documentId:uploaded.documentId,ownerSecret:isolatedOwner});
+ assert.equal(short.status,200);assert.match(short.url,/\/s\/[A-Za-z0-9_-]{43}$/);
+ const guestResponse=await fetch(short.url,{redirect:'manual'});
+ assert.equal(guestResponse.status,303);
+ assert.match(guestResponse.headers.get('location'),/^https:\/\/hiwon-websign-server\.onrender\.com\/sign\/ob-/);
  const duplicate=await post('dispatch-test',{documentId:uploaded.documentId,scope:'sign.request',token:permission.token});
  assert.equal(duplicate.ok,false);assert.equal(duplicate.code,'not_authorized');
 });
