@@ -441,8 +441,9 @@ async function route(req,res){
   check(/^[A-Za-z0-9_-]{43}$/.test(secret),401,'기기 전자서명 인증정보를 확인해 주세요.');
   const guestId=hash('onebiz-guest-sign-v1:'+secret);
   const isCreate=p==='/api/guest-sign/link';
-  limit(req,'guest-sign-ip:'+ip(req),isCreate?10:240,3600000);
-  limit(req,'guest-sign-device:'+guestId,isCreate?8:240,3600000);
+  limit(req,'guest-sign-ip:'+ip(req),isCreate?10:5000,3600000);
+  limit(req,'guest-sign-device:'+guestId,isCreate?8:5000,3600000);
+  if(isCreate)limit(req,'guest-sign-global',Number(env.GUEST_SIGN_DAILY_LIMIT||500),86400000);
   const input=await body(req),raw=input.contract;
   check(raw&&typeof raw==='object'&&!Array.isArray(raw),400,'계약서 내용을 확인해 주세요.');
   const contractId=text(raw.id,80),amount=Number(raw.amount);
@@ -482,8 +483,8 @@ async function route(req,res){
   if(old)return json(res,200,{ok:true,contractId,signUrl:websign.verifyUrl(open(old.sign_url))});
   check(!!env.HIWON_SIGN_APP_KEY,503,'전자서명 서버 연결키가 없습니다.');
   const created=await websign.createLink(contract,guestId,env.HIWON_SIGN_APP_KEY);
-  run('INSERT INTO guest_sign_links(guest_hash,contract_id,payload_hash,provider_id,sign_url,created) VALUES(?,?,?,?,?,?)',
-    guestId,contractId,digest,created.providerId,seal(created.signUrl),Date.now());
+  run('INSERT INTO guest_sign_links(guest_hash,contract_id,payload_hash,provider_id,sign_url,contract_body,created) VALUES(?,?,?,?,?,?,?)',
+    guestId,contractId,digest,created.providerId,seal(created.signUrl),seal(contract),Date.now());
   return json(res,200,{ok:true,contractId,signUrl:created.signUrl});
  }
  if(p==='/api/auth/phone/request'&&m==='POST'){
