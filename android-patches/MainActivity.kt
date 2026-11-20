@@ -7006,8 +7006,8 @@ private fun shareOnebizGuestSignedOriginal(context: Context, contract: Contract)
         return false
     }
     val originalUrl = signUrl.replaceFirst("/sign/", "/receipt/")
-    val message = "[ONEBIZ 원비즈 체결 계약서]\\n" + contract.customer +
-        " 고객님, 서명 완료된 계약서 원본을 확인해 주세요.\\n" + originalUrl
+    val message = "[ONEBIZ 원비즈 체결 계약서]\n" + contract.customer +
+        " 고객님, 서명 완료된 계약서 원본을 확인해 주세요.\n" + originalUrl
     val send = Intent(Intent.ACTION_SEND).apply {
         type = "text/plain"
         putExtra(Intent.EXTRA_TEXT, message)
