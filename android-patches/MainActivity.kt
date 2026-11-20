@@ -725,7 +725,8 @@ private fun HiwonAccountApp(accountScope: String) {
                     onPdf = { shareContractPdf(context, it) },
                     onKakaoSign = {
                         if (OnebizGuestWorkspace.isGuestScope(accountScope)) {
-                            if (it.signed) shareContractPdf(context, it)
+                            if (it.signed && it.signatureMethod == "카카오톡 웹서명") shareOnebizGuestSignedOriginal(context, it)
+                            else if (it.signed) shareContractPdf(context, it)
                             else shareOnebizGuestKakaoSignRequest(context, it)
                         } else shareKakaoSignRequest(context, it, accountScope, cloudToken)
                     },
@@ -6994,6 +6995,37 @@ private fun fetchOnebizGuestSignStatus(context: Context, contract: Contract): Co
     )
 }
 
+private fun shareOnebizGuestSignedOriginal(context: Context, contract: Contract): Boolean {
+    val scope = OnebizGuestWorkspace.scope(context)
+    val signUrl = context.getSharedPreferences("onebiz_guest_websign", Context.MODE_PRIVATE)
+        .getString("signurl:" + scope + ":" + contract.id, "").orEmpty()
+    val parsed = Uri.parse(signUrl)
+    if (parsed.scheme != "https" || parsed.host != "hiwon-websign-server.onrender.com" ||
+        !parsed.path.orEmpty().startsWith("/sign/")) {
+        Toast.makeText(context, "서명 원본 링크가 없습니다. 기존 계약서 PDF를 확인해 주세요.", Toast.LENGTH_LONG).show()
+        return false
+    }
+    val originalUrl = signUrl.replaceFirst("/sign/", "/receipt/")
+    val message = "[ONEBIZ 원비즈 체결 계약서]\\n" + contract.customer +
+        " 고객님, 서명 완료된 계약서 원본을 확인해 주세요.\\n" + originalUrl
+    val send = Intent(Intent.ACTION_SEND).apply {
+        type = "text/plain"
+        putExtra(Intent.EXTRA_TEXT, message)
+        setPackage("com.kakao.talk")
+    }
+    return try {
+        try { context.startActivity(send) }
+        catch (_: Exception) {
+            send.setPackage(null)
+            context.startActivity(Intent.createChooser(send, "체결 계약서 원본 보내기"))
+        }
+        true
+    } catch (e: Exception) {
+        Toast.makeText(context, "원본 공유 실패: " + (e.message ?: "공유 앱 오류"), Toast.LENGTH_LONG).show()
+        false
+    }
+}
+
 private fun shareOnebizGuestKakaoSignRequest(context: Context, contract: Contract): Boolean {
     if (contract.signed) return shareContractPdf(context, contract)
     if (!Regex("^010[0-9]{8}$").matches(contract.phone.filter(Char::isDigit))) {
@@ -7020,7 +7052,9 @@ private fun shareOnebizGuestKakaoSignRequest(context: Context, contract: Contrac
                     }
                     check(scope == OnebizGuestWorkspace.scope(context)) { "기기 문서함이 변경되었습니다." }
                     val prefs = context.getSharedPreferences("onebiz_guest_websign", Context.MODE_PRIVATE)
-                    check(prefs.edit().putBoolean("requested:" + scope + ":" + contract.id, true).commit()) {
+                    check(prefs.edit()
+                        .putBoolean("requested:" + scope + ":" + contract.id, true)
+                        .putString("signurl:" + scope + ":" + contract.id, url).commit()) {
                         "서명 요청 기록을 저장하지 못했습니다."
                     }
                     val message = buildString {
