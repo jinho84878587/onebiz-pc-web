@@ -7073,10 +7073,14 @@ private fun shareOnebizGuestKakaoSignRequest(context: Context, contract: Contrac
                                 putExtra(Intent.EXTRA_TEXT, message)
                                 setPackage("com.kakao.talk")
                             }
-                            try { context.startActivity(send) }
-                            catch (_: Exception) {
-                                send.setPackage(null)
-                                context.startActivity(Intent.createChooser(send, "계약서 서명 요청 보내기"))
+                            try {
+                                try { context.startActivity(send) }
+                                catch (_: Exception) {
+                                    send.setPackage(null)
+                                    context.startActivity(Intent.createChooser(send, "계약서 서명 요청 보내기"))
+                                }
+                            } catch (e: Exception) {
+                                Toast.makeText(context, "카카오톡 공유를 열 수 없습니다.", Toast.LENGTH_LONG).show()
                             }
                         }
                     }
