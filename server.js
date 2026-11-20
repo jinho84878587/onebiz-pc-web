@@ -432,6 +432,61 @@ async function route(req,res){
   return json(res,200,{...result,...(access.redirectUrl?{redirectUrl:access.redirectUrl}:{})});
  }
  if(p==='/api/config'&&m==='GET')return json(res,200,{mode,providers:Object.fromEntries(['kakao','naver','google'].map(k=>[k,provider.configured(env,k)])),phoneEnabled:local||!!(env.NCP_SERVICE_ID&&env.NCP_ACCESS_KEY&&env.NCP_SECRET_KEY&&env.NCP_SENDER),policyVersion,nativeSync:'automatic-account-sync',push:false,payments:false,subscription:{billingConnected:false,plans:['free','pro'],featureGateReady:true}});
+ // Guest web-signing is isolated from member accounts and paid message APIs.
+ // Possession of a unique 256-bit per-install secret authorizes only guest signing.
+ if((p==='/api/guest-sign/link'||p==='/api/guest-sign/status')&&m==='POST'){
+  check(env.ONEBIZ_GUEST_SIGN_ENABLED==='true',503,'로그인 없는 전자서명 기능은 아직 활성화되지 않았습니다.');
+  writeGuard(req);
+  const secret=String(req.headers['x-onebiz-guest-sign-key']||'');
+  check(/^[A-Za-z0-9_-]{43}$/.test(secret),401,'기기 전자서명 인증정보를 확인해 주세요.');
+  const guestId=hash('onebiz-guest-sign-v1:'+secret);
+  const isCreate=p==='/api/guest-sign/link';
+  limit(req,'guest-sign-ip:'+ip(req),isCreate?10:5000,3600000);
+  limit(req,'guest-sign-device:'+guestId,isCreate?8:5000,3600000);
+  if(isCreate)limit(req,'guest-sign-global',Number(env.GUEST_SIGN_DAILY_LIMIT||500),86400000);
+  const input=await body(req),raw=input.contract;
+  check(raw&&typeof raw==='object'&&!Array.isArray(raw),400,'계약서 내용을 확인해 주세요.');
+  const contractId=text(raw.id,80),amount=Number(raw.amount);
+  check(/^C-[0-9]{4}-[0-9]{3,}$/.test(contractId),400,'계약번호를 확인해 주세요.');
+  check(raw.signed!==true&&text(raw.customer,80),400,'서명대기 계약서와 고객명을 확인해 주세요.');
+  check(Number.isSafeInteger(amount)&&amount>0&&amount<=1000000000000,400,'계약금액을 확인해 주세요.');
+  const contract={
+   id:contractId,quoteId:text(raw.quoteId,100),customer:text(raw.customer,80),phone:phone(raw.phone),
+   address:text(raw.address,300),siteAddress:text(raw.siteAddress,300),siteAddressDetail:text(raw.siteAddressDetail,200),
+   item:text(raw.item,500),amount,contractDate:text(raw.contractDate,20),workDate:text(raw.workDate,20),
+   depositAmount:Number(raw.depositAmount)||0,depositDueDate:text(raw.depositDueDate,20),
+   middleAmount:Number(raw.middleAmount)||0,middleDueDate:text(raw.middleDueDate,20),
+   balanceAmount:Number(raw.balanceAmount)||0,balanceDueDate:text(raw.balanceDueDate,20),
+   standardTerms:text(raw.standardTerms,10000),specialTerms:text(raw.specialTerms,5000),
+   contractType:text(raw.contractType,100),signed:false
+  };
+  const digest=websign.fingerprint(contract,guestId);
+  const old=one('SELECT * FROM guest_sign_links WHERE guest_hash=? AND contract_id=?',guestId,contractId);
+  check(!old||old.payload_hash===digest,409,'서명 요청 후 계약 내용이 변경됐습니다. 기존 요청을 확인해 주세요.');
+  if(!isCreate){
+   if(!old)return json(res,200,{ok:true,exists:false,signed:false});
+   if(old.signed_info){
+    const recorded=open(old.signed_info);
+    return json(res,200,{ok:true,exists:true,signed:true,signatureName:recorded.signatureName,identityStatus:recorded.identityStatus,signedAt:recorded.signedAt});
+   }
+   check(!!env.HIWON_SIGN_APP_KEY,503,'전자서명 서버 연결키가 없습니다.');
+   const status=await websign.status(old.provider_id,env.HIWON_SIGN_APP_KEY);
+   if(!status.signed)return json(res,200,{ok:true,exists:true,signed:false});
+   // Never mark a document signed until the original signature was archived.
+   const signatureDataUrl=await websign.originalSignature(open(old.sign_url));
+   const result={signatureName:status.signatureName,identityStatus:status.identityStatus,signedAt:status.signedAt,signatureDataUrl};
+   run('UPDATE guest_sign_links SET signed_info=? WHERE guest_hash=? AND contract_id=? AND payload_hash=?',
+     seal(result),guestId,contractId,digest);
+   return json(res,200,{ok:true,exists:true,signed:true,signatureName:result.signatureName,identityStatus:result.identityStatus,signedAt:result.signedAt});
+  }
+  check(input.confirm===true,400,'계약서 온라인 전송에 동의해 주세요.');
+  if(old)return json(res,200,{ok:true,contractId,signUrl:websign.verifyUrl(open(old.sign_url))});
+  check(!!env.HIWON_SIGN_APP_KEY,503,'전자서명 서버 연결키가 없습니다.');
+  const created=await websign.createLink(contract,guestId,env.HIWON_SIGN_APP_KEY);
+  run('INSERT INTO guest_sign_links(guest_hash,contract_id,payload_hash,provider_id,sign_url,contract_body,created) VALUES(?,?,?,?,?,?,?)',
+    guestId,contractId,digest,created.providerId,seal(created.signUrl),seal(contract),Date.now());
+  return json(res,200,{ok:true,contractId,signUrl:created.signUrl});
+ }
  if(p==='/api/auth/phone/request'&&m==='POST'){
   writeGuard(req);limit(req,'sms-ip:'+ip(req),20,3600000);const b=await body(req),number=phone(b.phone),c=consent(b);
   let link=null;if(b.link===true){const s=getSession(req);writeGuard(req,s);check(Date.now()-s.created<600000,403,'로그인 후 10분 이내에 계정을 연결해 주세요.');link=s.actor;}
