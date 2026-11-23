@@ -5,6 +5,7 @@ const {HttpError,check,random,equal,sha,phone,text,passwordHash}=require('./lib/
 const provider=require('./lib/providers');
 const templateInspector=require('./lib/solapi-template-inspector');
 const websign=require('./lib/websign-bridge');
+const guestLocalSign=require('./lib/guest-local-sign');
 const signShortLinks=require('./lib/sign-short-links');
 const contractOriginals=require('./lib/contract-originals');
 const paymentDocuments=require('./lib/payment-documents');
@@ -396,6 +397,7 @@ async function route(req,res){
  res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Frame-Options','DENY');
  res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
  if(!local)res.setHeader('Strict-Transport-Security','max-age=31536000');
+ if(env.ONEBIZ_GUEST_SIGN_SELFHOSTED==='true'&&await guestLocalSign.publicRoute(req,res,u,store,origin,body,limit))return;
  if(p==='/health')return json(res,200,{ok:true,version:'2.0.0-dev.1',mode,documentCenter:true,documentCenterVersion:1});
  if(/^\/(contract|s)\/[A-Za-z0-9_-]{43}$/.test(p)&&(m==='GET'||m==='HEAD')){
   limit(req,'public-document-landing:'+ip(req),120,600000);
@@ -460,6 +462,11 @@ async function route(req,res){
    standardTerms:text(raw.standardTerms,10000),specialTerms:text(raw.specialTerms,5000),
    contractType:text(raw.contractType,100),signed:false
   };
+  if(env.ONEBIZ_GUEST_SIGN_SELFHOSTED==='true'){
+   if(isCreate)check(input.confirm===true,400,'계약서 온라인 전송에 동의해 주세요.');
+   const response=isCreate?guestLocalSign.create(store,origin,guestId,contract):guestLocalSign.status(store,guestId,contract);
+   return json(res,200,response);
+  }
   const digest=websign.fingerprint(contract,guestId);
   const old=one('SELECT * FROM guest_sign_links WHERE guest_hash=? AND contract_id=?',guestId,contractId);
   check(!old||old.payload_hash===digest,409,'서명 요청 후 계약 내용이 변경됐습니다. 기존 요청을 확인해 주세요.');
