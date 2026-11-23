@@ -532,6 +532,25 @@ private fun HiwonAccountApp(accountScope: String) {
         }
     }
 
+    // Guest workspace counters are anonymous and kept separate from signed-in member data.
+    // Do not send document content, names, phones, amounts, or addresses.
+    LaunchedEffect(accountScope, cloudReady, cloudToken, businessProfile.isReady,
+        customers.size, quotes.size, contracts.size, contracts.count { it.signed }, employees.size) {
+        if (!cloudReady || !businessProfile.isReady || cloudToken.isNotBlank() ||
+            !OnebizGuestWorkspace.isGuestScope(accountScope) ||
+            accountScope != OnebizGuestWorkspace.scope(context) ||
+            !OnebizGuestWorkspace.isActive(context)) return@LaunchedEffect
+        delay(1000)
+        val totals = JSONObject().apply {
+            put("customers", customers.size)
+            put("quotes", quotes.size)
+            put("contracts", contracts.size)
+            put("signed", contracts.count { it.signed })
+            put("employees", employees.size)
+        }
+        withContext(Dispatchers.IO) { sendOnebizGuestUsageCounts(context, accountScope, totals) }
+    }
+
     // Do not show a social-login screen. An older account may still have a
     // protected, separately backed-up workspace. Never claim it belongs to a
     // new guest automatically or merge its documents without verification.
@@ -6913,6 +6932,44 @@ fun loadData(context: Context): AppData {
     } catch (_: Exception) { AppData(emptyList(), emptyList(), emptyList()) }
 }
 
+
+/** Anonymous per-install ID used only for usage counters; no customer data is transferred. */
+private fun onebizGuestUsageKey(context: Context, scope: String): String {
+    if (!OnebizGuestWorkspace.isGuestScope(scope)) return ""
+    val prefs = context.getSharedPreferences("onebiz_guest_usage", Context.MODE_PRIVATE)
+    val name = "secret:" + scope
+    val saved = prefs.getString(name, "").orEmpty()
+    if (saved.isNotBlank()) return saved
+    val random = ByteArray(32).also { SecureRandom().nextBytes(it) }
+    val secret = Base64.getUrlEncoder().withoutPadding().encodeToString(random)
+    check(prefs.edit().putString(name, secret).commit()) { "기기 통계 인증정보를 보관하지 못했습니다." }
+    return secret
+}
+
+private fun sendOnebizGuestUsageCounts(context: Context, scope: String, counts: JSONObject): Boolean {
+    if (!OnebizGuestWorkspace.isGuestScope(scope) ||
+        scope != OnebizGuestWorkspace.scope(context) ||
+        !OnebizGuestWorkspace.isActive(context) || onebizCloudToken(context).isNotBlank()) return false
+    return runCatching {
+        val secret = onebizGuestUsageKey(context, scope)
+        if (secret.isBlank()) return false
+        val connection = (URL(ONEBIZ_CLOUD_BASE_URL.trimEnd('/') + "/api/guest-usage/sync")
+            .openConnection() as HttpURLConnection).apply {
+            requestMethod = "POST"
+            connectTimeout = 7000
+            readTimeout = 7000
+            doOutput = true
+            setRequestProperty("X-Onebiz-Client", "android")
+            setRequestProperty("X-Onebiz-Guest-Usage-Key", secret)
+            setRequestProperty("Content-Type", "application/json; charset=UTF-8")
+        }
+        try {
+            val payload = JSONObject().put("counts", counts)
+            connection.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
+            connection.responseCode in 200..299
+        } finally { connection.disconnect() }
+    }.getOrDefault(false)
+}
 
 /** Guest signing uses a separate secret and never modifies cloud login, local ownership or backups. */
 private fun onebizGuestSigningKey(context: Context, create: Boolean): String {
