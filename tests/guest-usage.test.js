@@ -19,7 +19,8 @@ test('guest usage counters are idempotent, isolated from members and contain no 
   try{if((await fetch(origin+'/health')).ok){ready=true;break}}catch{}
  }
  assert.ok(ready,'test server startup');
- const token1=crypto.randomBytes(32).toString('base64url'),token2=crypto.randomBytes(32).toString('base64url');
+ const token1=crypto.randomBytes(32).toString('base64url'),token2=crypto.randomBytes(32).toString('base64url'),
+ token3=crypto.randomBytes(32).toString('base64url');
  const counts={customers:3,quotes:4,contracts:2,signed:1,employees:0};
  async function sync(token,payload={counts},headers={}){
   const r=await fetch(origin+'/api/guest-usage/sync',{method:'POST',headers:{
@@ -40,20 +41,29 @@ test('guest usage counters are idempotent, isolated from members and contain no 
  assert.equal((await sync(token1)).status,200);
  let d=await dashboard();
  assert.equal(d.users,0,'no member account must be created');
- assert.equal(d.guestUsage.devices,1,'repeat sync is not a new device');
- assert.equal(d.guestUsage.counts.quotes,4);
- assert.equal(d.guestUsage.counts.signed,1);
+ assert.equal(d.guestUsage.devices,0,'legacy debug clients are not production');
+ assert.equal(d.testUsage.devices,1,'repeat sync is not a new device');
+ assert.equal(d.testUsage.counts.quotes,4);
+ assert.equal(d.testUsage.counts.signed,1);
  assert.equal(d.counts.quotes||0,0,'member counters remain separate');
  assert.equal((await sync(token1,{counts:{...counts,quotes:5,contracts:3}})).status,200);
  assert.equal((await sync(token2,{counts:{...counts,quotes:1,contracts:1,signed:0}})).status,200);
  d=await dashboard();
- assert.equal(d.guestUsage.devices,2);
- assert.equal(d.guestUsage.counts.quotes,6);
- assert.equal(d.guestUsage.counts.contracts,4);
- assert.equal(d.guestUsage.counts.signed,1);
+ assert.equal(d.testUsage.devices,2);
+ assert.equal(d.testUsage.counts.quotes,6);
+ assert.equal(d.testUsage.counts.contracts,4);
+ assert.equal(d.testUsage.counts.signed,1);
+ assert.equal((await sync(token3,{counts:{...counts,quotes:7,contracts:4,signed:2},channel:'production'})).status,200);
+ assert.equal((await sync(token1,{counts,channel:'production'})).status,200,'legacy device cannot switch cohorts');
+ assert.equal((await sync(token3,{counts,channel:'unknown'})).status,400);
+ d=await dashboard();
+ assert.equal(d.guestUsage.devices,1);
+ assert.equal(d.guestUsage.counts.quotes,7);
+ assert.equal(d.testUsage.devices,2);
+ assert.equal(d.testUsage.counts.quotes,5);
  assert.equal(db.one('SELECT COUNT(*) n FROM users').n,0);
  const stored=db.all('SELECT device_hash,counts FROM guest_usage_counters');
- assert.equal(stored.length,2);
+ assert.equal(stored.length,3);
  for(const row of stored){
   assert.ok(!row.device_hash.includes(token1)&&!row.device_hash.includes(token2));
   assert.deepEqual(Object.keys(JSON.parse(row.counts)).sort(),['contracts','customers','employees','quotes','signed']);
