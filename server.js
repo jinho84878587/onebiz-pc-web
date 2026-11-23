@@ -433,6 +433,32 @@ async function route(req,res){
   const result=documentTracking.opened(access.record,visitor,input.challenge,accessMode,access.action);
   return json(res,200,{...result,...(access.redirectUrl?{redirectUrl:access.redirectUrl}:{})});
  }
+ // Anonymous usage telemetry sends aggregate counts only; never a client/customer record.
+ if(p==='/api/guest-usage/sync'&&m==='POST'){
+  check(env.ONEBIZ_GUEST_USAGE_ENABLED==='true',503,'비로그인 통계 수집 기능이 비활성화되어 있습니다.');
+  check(req.headers['x-onebiz-client']==='android',403,'원비즈 앱 전용 요청입니다.');
+  writeGuard(req);
+  const secret=String(req.headers['x-onebiz-guest-usage-key']||'');
+  check(/^[A-Za-z0-9_-]{43}$/.test(secret),401,'기기 통계 인증정보가 없습니다.');
+  const deviceHash=hash('onebiz-anon-usage-v1:'+secret);
+  limit(req,'guest-usage-ip:'+ip(req),600,3600000);
+  limit(req,'guest-usage-device:'+deviceHash,120,3600000);
+  const input=await body(req);
+  check(input.counts&&typeof input.counts==='object'&&!Array.isArray(input.counts),400,'통계 형식을 확인해 주세요.');
+  const allowed=['customers','quotes','contracts','signed','employees'];
+  check(Object.keys(input).every(k=>k==='counts')&&Object.keys(input.counts).length===allowed.length&&
+   Object.keys(input.counts).every(k=>allowed.includes(k)),400,'집계 항목이 올바르지 않습니다.');
+  const counts={};
+  for(const k of allowed){
+   const value=input.counts[k];
+   check(Number.isSafeInteger(value)&&value>=0&&value<=10000,400,'집계 숫자가 올바르지 않습니다.');
+   counts[k]=value;
+  }
+  check(counts.signed<=counts.contracts,400,'서명완료 건수를 확인해 주세요.');
+  run('INSERT INTO guest_usage_counters(device_hash,counts,updated) VALUES(?,?,?) ON CONFLICT(device_hash) DO UPDATE SET counts=excluded.counts,updated=excluded.updated',
+   deviceHash,JSON.stringify(counts),Date.now());
+  return json(res,200,{ok:true});
+ }
  if(p==='/api/config'&&m==='GET')return json(res,200,{mode,providers:Object.fromEntries(['kakao','naver','google'].map(k=>[k,provider.configured(env,k)])),phoneEnabled:local||!!(env.NCP_SERVICE_ID&&env.NCP_ACCESS_KEY&&env.NCP_SECRET_KEY&&env.NCP_SENDER),policyVersion,nativeSync:'automatic-account-sync',push:false,payments:false,subscription:{billingConnected:false,plans:['free','pro'],featureGateReady:true}});
  // Guest web-signing is isolated from member accounts and paid message APIs.
  // Possession of a unique 256-bit per-install secret authorizes only guest signing.
@@ -944,7 +970,14 @@ async function route(req,res){
   return json(res,result.ok?200:502,{ok:result.ok,error,requestId:id,accepted:result.ok,providerStatus:result.status});
  }
  if(p==='/api/admin/alimtalk/logs'&&m==='GET'){mustAdmin(req,['owner','operator']);return json(res,200,{items:all('SELECT id,kind,phone_mask,template_id,status,created FROM alimtalk_logs ORDER BY created DESC LIMIT 100')});}
- if(p==='/api/admin/dashboard'&&m==='GET'){const s=mustAdmin(req);return json(res,200,{users:one('SELECT COUNT(*) n FROM users').n,incomplete:one('SELECT COUNT(*) n FROM users WHERE complete=0').n,pending:one("SELECT COUNT(*) n FROM dispatch WHERE status='접수대기'").n,activeNotices:one('SELECT COUNT(*) n FROM notices WHERE active=1 AND starts<=? AND ends>?',Date.now(),Date.now()).n,counts:all('SELECT counts FROM snapshots').reduce((acc,r)=>{for(const [k,v]of Object.entries(JSON.parse(r.counts)))acc[k]=(acc[k]||0)+v;return acc;},{}),mode,features:{push:false,billing:false,documentOriginalAccess:false}});}
+ if(p==='/api/admin/dashboard'&&m==='GET'){
+  const s=mustAdmin(req),guestRows=env.ONEBIZ_GUEST_USAGE_ENABLED==='true'?
+   all('SELECT counts FROM guest_usage_counters WHERE updated>=?',Date.now()-30*86400000):[];
+  const guestCounts={customers:0,quotes:0,contracts:0,signed:0,employees:0};
+  for(const row of guestRows){
+   const c=JSON.parse(row.counts);for(const k of Object.keys(guestCounts))guestCounts[k]+=(Number(c[k])||0);
+  }
+  return json(res,200,{guestUsage:{devices:guestRows.length,counts:guestCounts,windowDays:30},users:one('SELECT COUNT(*) n FROM users').n,incomplete:one('SELECT COUNT(*) n FROM users WHERE complete=0').n,pending:one("SELECT COUNT(*) n FROM dispatch WHERE status='접수대기'").n,activeNotices:one('SELECT COUNT(*) n FROM notices WHERE active=1 AND starts<=? AND ends>?',Date.now(),Date.now()).n,counts:all('SELECT counts FROM snapshots').reduce((acc,r)=>{for(const [k,v]of Object.entries(JSON.parse(r.counts)))acc[k]=(acc[k]||0)+v;return acc;},{}),mode,features:{push:false,billing:false,documentOriginalAccess:false}});}
  if(p==='/api/admin/users'&&m==='GET'){const s=mustAdmin(req);const page=Math.max(0,Number(u.searchParams.get('page'))||0),full=s.role!=='viewer',keyword=text(u.searchParams.get('q'),120).toLowerCase(),businessType=text(u.searchParams.get('businessType'),30);const raw=all('SELECT * FROM users ORDER BY created DESC'),profiles=new Map(),phoneGroups=new Map(),regGroups=new Map();for(const row of raw){const pr=open(row.profile);profiles.set(row.id,pr);const ph=String(pr.phone||'').replace(/\D/g,''),reg=String(pr.registrationNo||'').replace(/\D/g,'');if(ph){if(!phoneGroups.has(ph))phoneGroups.set(ph,[]);phoneGroups.get(ph).push(row.id);}if(reg){if(!regGroups.has(reg))regGroups.set(reg,[]);regGroups.get(reg).push(row.id);}}const decorated=raw.map(row=>{const pr=profiles.get(row.id),base=publicStats(row,full),ph=String(pr.phone||'').replace(/\D/g,''),reg=String(pr.registrationNo||'').replace(/\D/g,''),phoneDup=ph&&(phoneGroups.get(ph)||[]).length>1,regDup=reg&&(regGroups.get(reg)||[]).length>1,duplicateStatus=regDup||phoneDup?'중복의심':'정상',duplicateReason=regDup?'사업자번호 동일':phoneDup?'연락처 동일':'';return {...base,duplicateStatus,duplicateReason};}).filter(x=>!businessType||x.businessType===businessType).filter(x=>!keyword||[x.businessName,x.name,x.phone,x.address,x.registrationNo,x.industry,x.businessType].join(' ').toLowerCase().includes(keyword));const total=decorated.length,items=decorated.slice(page*100,page*100+100),duplicateCount=decorated.filter(x=>x.duplicateStatus==='중복의심').length;log(s.actor,'users.list','',{page,full,keyword,businessType});return json(res,200,{items,total,duplicateCount,fullProfile:full});}
  if(/^\/api\/admin\/users\/[^/]+\/status$/.test(p)&&m==='PUT'){const s=mustAdmin(req,['owner']);writeGuard(req,s);const id=p.split('/')[4],b=await body(req);check(['active','suspended'].includes(b.status)&&text(b.reason).length>=5,400,'상태와 사유(5자 이상)를 입력해 주세요.');check(one('SELECT id FROM users WHERE id=?',id),404,'사용자가 없습니다.');tx(()=>{run('UPDATE users SET status=? WHERE id=?',b.status,id);run('DELETE FROM sessions WHERE actor=? AND kind=?',id,'user');log(s.actor,'user.status',id,{status:b.status,reason:text(b.reason)});});return json(res,200,{ok:true});}
  if(/^\/api\/admin\/users\/[^/]+\/business-type$/.test(p)&&m==='PUT'){const s=mustAdmin(req,['owner','operator']);writeGuard(req,s);const id=p.split('/')[4],b=await body(req),value=text(b.businessType,30),allowed=['개인회원','프리랜서','개인/프리랜서','개인사업자','법인사업자'];check(allowed.includes(value),400,'사업자 유형을 확인해 주세요.');const row=one('SELECT profile FROM users WHERE id=?',id);check(row,404,'사용자가 없습니다.');const pr=open(row.profile);pr.businessType=value;run('UPDATE users SET profile=?,profile_rev=profile_rev+1 WHERE id=?',seal(pr),id);log(s.actor,'user.businessType',id,{businessType:value});return json(res,200,{ok:true,businessType:value});}
