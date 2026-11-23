@@ -7000,7 +7000,7 @@ private fun shareOnebizGuestSignedOriginal(context: Context, contract: Contract)
     val signUrl = context.getSharedPreferences("onebiz_guest_websign", Context.MODE_PRIVATE)
         .getString("signurl:" + scope + ":" + contract.id, "").orEmpty()
     val parsed = Uri.parse(signUrl)
-    if (parsed.scheme != "https" || parsed.host != "hiwon-websign-server.onrender.com" ||
+    if (parsed.scheme != "https" || parsed.host !in setOf("hiwon-websign-server.onrender.com", "onebiz-pc-web.onrender.com", "onebiz-guest-sign-test-1123.onrender.com") ||
         !parsed.path.orEmpty().startsWith("/sign/")) {
         Toast.makeText(context, "서명 원본 링크가 없습니다. 기존 계약서 PDF를 확인해 주세요.", Toast.LENGTH_LONG).show()
         return false
@@ -7047,7 +7047,7 @@ private fun shareOnebizGuestKakaoSignRequest(context: Context, contract: Contrac
                     if (!ok) error(onebizErrorMessage(code, body))
                     val url = JSONObject(body).optString("signUrl")
                     val parsed = Uri.parse(url)
-                    check(parsed.scheme == "https" && parsed.host == "hiwon-websign-server.onrender.com") {
+                    check(parsed.scheme == "https" && parsed.host in setOf("hiwon-websign-server.onrender.com", "onebiz-pc-web.onrender.com", "onebiz-guest-sign-test-1123.onrender.com")) {
                         "전자서명 주소를 확인할 수 없습니다."
                     }
                     check(scope == OnebizGuestWorkspace.scope(context)) { "기기 문서함이 변경되었습니다." }
