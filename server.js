@@ -5,6 +5,7 @@ const {HttpError,check,random,equal,sha,phone,text,passwordHash}=require('./lib/
 const provider=require('./lib/providers');
 const templateInspector=require('./lib/solapi-template-inspector');
 const websign=require('./lib/websign-bridge');
+const guestLocalSign=require('./lib/guest-local-sign');
 const signShortLinks=require('./lib/sign-short-links');
 const contractOriginals=require('./lib/contract-originals');
 const paymentDocuments=require('./lib/payment-documents');
@@ -396,6 +397,7 @@ async function route(req,res){
  res.setHeader('X-Content-Type-Options','nosniff');res.setHeader('Referrer-Policy','no-referrer');res.setHeader('X-Frame-Options','DENY');
  res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
  if(!local)res.setHeader('Strict-Transport-Security','max-age=31536000');
+ if(env.ONEBIZ_GUEST_SIGN_SELFHOSTED==='true'&&await guestLocalSign.publicRoute(req,res,u,store,origin,body,limit))return;
  if(p==='/health')return json(res,200,{ok:true,version:'2.0.0-dev.1',mode,documentCenter:true,documentCenterVersion:1});
  if(/^\/(contract|s)\/[A-Za-z0-9_-]{43}$/.test(p)&&(m==='GET'||m==='HEAD')){
   limit(req,'public-document-landing:'+ip(req),120,600000);
@@ -431,7 +433,93 @@ async function route(req,res){
   const result=documentTracking.opened(access.record,visitor,input.challenge,accessMode,access.action);
   return json(res,200,{...result,...(access.redirectUrl?{redirectUrl:access.redirectUrl}:{})});
  }
+ // Anonymous usage telemetry sends aggregate counts only; never a client/customer record.
+ if(p==='/api/guest-usage/sync'&&m==='POST'){
+  check(env.ONEBIZ_GUEST_USAGE_ENABLED==='true',503,'비로그인 통계 수집 기능이 비활성화되어 있습니다.');
+  check(req.headers['x-onebiz-client']==='android',403,'원비즈 앱 전용 요청입니다.');
+  writeGuard(req);
+  const secret=String(req.headers['x-onebiz-guest-usage-key']||'');
+  check(/^[A-Za-z0-9_-]{43}$/.test(secret),401,'기기 통계 인증정보가 없습니다.');
+  const deviceHash=hash('onebiz-anon-usage-v1:'+secret);
+  limit(req,'guest-usage-ip:'+ip(req),600,3600000);
+  limit(req,'guest-usage-device:'+deviceHash,120,3600000);
+  const input=await body(req);
+  check(input.counts&&typeof input.counts==='object'&&!Array.isArray(input.counts),400,'통계 형식을 확인해 주세요.');
+  const allowed=['customers','quotes','contracts','signed','employees'];
+  check(Object.keys(input).every(k=>k==='counts')&&Object.keys(input.counts).length===allowed.length&&
+   Object.keys(input.counts).every(k=>allowed.includes(k)),400,'집계 항목이 올바르지 않습니다.');
+  const counts={};
+  for(const k of allowed){
+   const value=input.counts[k];
+   check(Number.isSafeInteger(value)&&value>=0&&value<=10000,400,'집계 숫자가 올바르지 않습니다.');
+   counts[k]=value;
+  }
+  check(counts.signed<=counts.contracts,400,'서명완료 건수를 확인해 주세요.');
+  run('INSERT INTO guest_usage_counters(device_hash,counts,updated) VALUES(?,?,?) ON CONFLICT(device_hash) DO UPDATE SET counts=excluded.counts,updated=excluded.updated',
+   deviceHash,JSON.stringify(counts),Date.now());
+  return json(res,200,{ok:true});
+ }
  if(p==='/api/config'&&m==='GET')return json(res,200,{mode,providers:Object.fromEntries(['kakao','naver','google'].map(k=>[k,provider.configured(env,k)])),phoneEnabled:local||!!(env.NCP_SERVICE_ID&&env.NCP_ACCESS_KEY&&env.NCP_SECRET_KEY&&env.NCP_SENDER),policyVersion,nativeSync:'automatic-account-sync',push:false,payments:false,subscription:{billingConnected:false,plans:['free','pro'],featureGateReady:true}});
+ // Guest web-signing is isolated from member accounts and paid message APIs.
+ // Possession of a unique 256-bit per-install secret authorizes only guest signing.
+ if((p==='/api/guest-sign/link'||p==='/api/guest-sign/status')&&m==='POST'){
+  check(env.ONEBIZ_GUEST_SIGN_ENABLED==='true',503,'로그인 없는 전자서명 기능은 아직 활성화되지 않았습니다.');
+  writeGuard(req);
+  const secret=String(req.headers['x-onebiz-guest-sign-key']||'');
+  check(/^[A-Za-z0-9_-]{43}$/.test(secret),401,'기기 전자서명 인증정보를 확인해 주세요.');
+  const guestId=hash('onebiz-guest-sign-v1:'+secret);
+  const isCreate=p==='/api/guest-sign/link';
+  limit(req,'guest-sign-ip:'+ip(req),isCreate?10:5000,3600000);
+  limit(req,'guest-sign-device:'+guestId,isCreate?8:5000,3600000);
+  if(isCreate)limit(req,'guest-sign-global',Number(env.GUEST_SIGN_DAILY_LIMIT||500),86400000);
+  const input=await body(req),raw=input.contract;
+  check(raw&&typeof raw==='object'&&!Array.isArray(raw),400,'계약서 내용을 확인해 주세요.');
+  const contractId=text(raw.id,80),amount=Number(raw.amount);
+  check(/^C-[0-9]{4}-[0-9]{3,}$/.test(contractId),400,'계약번호를 확인해 주세요.');
+  check(raw.signed!==true&&text(raw.customer,80),400,'서명대기 계약서와 고객명을 확인해 주세요.');
+  check(Number.isSafeInteger(amount)&&amount>0&&amount<=1000000000000,400,'계약금액을 확인해 주세요.');
+  const contract={
+   id:contractId,quoteId:text(raw.quoteId,100),customer:text(raw.customer,80),phone:phone(raw.phone),
+   address:text(raw.address,300),siteAddress:text(raw.siteAddress,300),siteAddressDetail:text(raw.siteAddressDetail,200),
+   item:text(raw.item,500),amount,contractDate:text(raw.contractDate,20),workDate:text(raw.workDate,20),
+   depositAmount:Number(raw.depositAmount)||0,depositDueDate:text(raw.depositDueDate,20),
+   middleAmount:Number(raw.middleAmount)||0,middleDueDate:text(raw.middleDueDate,20),
+   balanceAmount:Number(raw.balanceAmount)||0,balanceDueDate:text(raw.balanceDueDate,20),
+   standardTerms:text(raw.standardTerms,10000),specialTerms:text(raw.specialTerms,5000),
+   contractType:text(raw.contractType,100),signed:false
+  };
+  if(env.ONEBIZ_GUEST_SIGN_SELFHOSTED==='true'){
+   if(isCreate)check(input.confirm===true,400,'계약서 온라인 전송에 동의해 주세요.');
+   const response=isCreate?guestLocalSign.create(store,origin,guestId,contract):guestLocalSign.status(store,guestId,contract);
+   return json(res,200,response);
+  }
+  const digest=websign.fingerprint(contract,guestId);
+  const old=one('SELECT * FROM guest_sign_links WHERE guest_hash=? AND contract_id=?',guestId,contractId);
+  check(!old||old.payload_hash===digest,409,'서명 요청 후 계약 내용이 변경됐습니다. 기존 요청을 확인해 주세요.');
+  if(!isCreate){
+   if(!old)return json(res,200,{ok:true,exists:false,signed:false});
+   if(old.signed_info){
+    const recorded=open(old.signed_info);
+    return json(res,200,{ok:true,exists:true,signed:true,signatureName:recorded.signatureName,identityStatus:recorded.identityStatus,signedAt:recorded.signedAt});
+   }
+   check(!!env.HIWON_SIGN_APP_KEY,503,'전자서명 서버 연결키가 없습니다.');
+   const status=await websign.status(old.provider_id,env.HIWON_SIGN_APP_KEY);
+   if(!status.signed)return json(res,200,{ok:true,exists:true,signed:false});
+   // Never mark a document signed until the original signature was archived.
+   const signatureDataUrl=await websign.originalSignature(open(old.sign_url));
+   const result={signatureName:status.signatureName,identityStatus:status.identityStatus,signedAt:status.signedAt,signatureDataUrl};
+   run('UPDATE guest_sign_links SET signed_info=? WHERE guest_hash=? AND contract_id=? AND payload_hash=?',
+     seal(result),guestId,contractId,digest);
+   return json(res,200,{ok:true,exists:true,signed:true,signatureName:result.signatureName,identityStatus:result.identityStatus,signedAt:result.signedAt});
+  }
+  check(input.confirm===true,400,'계약서 온라인 전송에 동의해 주세요.');
+  if(old)return json(res,200,{ok:true,contractId,signUrl:websign.verifyUrl(open(old.sign_url))});
+  check(!!env.HIWON_SIGN_APP_KEY,503,'전자서명 서버 연결키가 없습니다.');
+  const created=await websign.createLink(contract,guestId,env.HIWON_SIGN_APP_KEY);
+  run('INSERT INTO guest_sign_links(guest_hash,contract_id,payload_hash,provider_id,sign_url,contract_body,created) VALUES(?,?,?,?,?,?,?)',
+    guestId,contractId,digest,created.providerId,seal(created.signUrl),seal(contract),Date.now());
+  return json(res,200,{ok:true,contractId,signUrl:created.signUrl});
+ }
  if(p==='/api/auth/phone/request'&&m==='POST'){
   writeGuard(req);limit(req,'sms-ip:'+ip(req),20,3600000);const b=await body(req),number=phone(b.phone),c=consent(b);
   let link=null;if(b.link===true){const s=getSession(req);writeGuard(req,s);check(Date.now()-s.created<600000,403,'로그인 후 10분 이내에 계정을 연결해 주세요.');link=s.actor;}
@@ -882,7 +970,14 @@ async function route(req,res){
   return json(res,result.ok?200:502,{ok:result.ok,error,requestId:id,accepted:result.ok,providerStatus:result.status});
  }
  if(p==='/api/admin/alimtalk/logs'&&m==='GET'){mustAdmin(req,['owner','operator']);return json(res,200,{items:all('SELECT id,kind,phone_mask,template_id,status,created FROM alimtalk_logs ORDER BY created DESC LIMIT 100')});}
- if(p==='/api/admin/dashboard'&&m==='GET'){const s=mustAdmin(req);return json(res,200,{users:one('SELECT COUNT(*) n FROM users').n,incomplete:one('SELECT COUNT(*) n FROM users WHERE complete=0').n,pending:one("SELECT COUNT(*) n FROM dispatch WHERE status='접수대기'").n,activeNotices:one('SELECT COUNT(*) n FROM notices WHERE active=1 AND starts<=? AND ends>?',Date.now(),Date.now()).n,counts:all('SELECT counts FROM snapshots').reduce((acc,r)=>{for(const [k,v]of Object.entries(JSON.parse(r.counts)))acc[k]=(acc[k]||0)+v;return acc;},{}),mode,features:{push:false,billing:false,documentOriginalAccess:false}});}
+ if(p==='/api/admin/dashboard'&&m==='GET'){
+  const s=mustAdmin(req),guestRows=env.ONEBIZ_GUEST_USAGE_ENABLED==='true'?
+   all('SELECT counts FROM guest_usage_counters WHERE updated>=?',Date.now()-30*86400000):[];
+  const guestCounts={customers:0,quotes:0,contracts:0,signed:0,employees:0};
+  for(const row of guestRows){
+   const c=JSON.parse(row.counts);for(const k of Object.keys(guestCounts))guestCounts[k]+=(Number(c[k])||0);
+  }
+  return json(res,200,{guestUsage:{devices:guestRows.length,counts:guestCounts,windowDays:30},users:one('SELECT COUNT(*) n FROM users').n,incomplete:one('SELECT COUNT(*) n FROM users WHERE complete=0').n,pending:one("SELECT COUNT(*) n FROM dispatch WHERE status='접수대기'").n,activeNotices:one('SELECT COUNT(*) n FROM notices WHERE active=1 AND starts<=? AND ends>?',Date.now(),Date.now()).n,counts:all('SELECT counts FROM snapshots').reduce((acc,r)=>{for(const [k,v]of Object.entries(JSON.parse(r.counts)))acc[k]=(acc[k]||0)+v;return acc;},{}),mode,features:{push:false,billing:false,documentOriginalAccess:false}});}
  if(p==='/api/admin/users'&&m==='GET'){const s=mustAdmin(req);const page=Math.max(0,Number(u.searchParams.get('page'))||0),full=s.role!=='viewer',keyword=text(u.searchParams.get('q'),120).toLowerCase(),businessType=text(u.searchParams.get('businessType'),30);const raw=all('SELECT * FROM users ORDER BY created DESC'),profiles=new Map(),phoneGroups=new Map(),regGroups=new Map();for(const row of raw){const pr=open(row.profile);profiles.set(row.id,pr);const ph=String(pr.phone||'').replace(/\D/g,''),reg=String(pr.registrationNo||'').replace(/\D/g,'');if(ph){if(!phoneGroups.has(ph))phoneGroups.set(ph,[]);phoneGroups.get(ph).push(row.id);}if(reg){if(!regGroups.has(reg))regGroups.set(reg,[]);regGroups.get(reg).push(row.id);}}const decorated=raw.map(row=>{const pr=profiles.get(row.id),base=publicStats(row,full),ph=String(pr.phone||'').replace(/\D/g,''),reg=String(pr.registrationNo||'').replace(/\D/g,''),phoneDup=ph&&(phoneGroups.get(ph)||[]).length>1,regDup=reg&&(regGroups.get(reg)||[]).length>1,duplicateStatus=regDup||phoneDup?'중복의심':'정상',duplicateReason=regDup?'사업자번호 동일':phoneDup?'연락처 동일':'';return {...base,duplicateStatus,duplicateReason};}).filter(x=>!businessType||x.businessType===businessType).filter(x=>!keyword||[x.businessName,x.name,x.phone,x.address,x.registrationNo,x.industry,x.businessType].join(' ').toLowerCase().includes(keyword));const total=decorated.length,items=decorated.slice(page*100,page*100+100),duplicateCount=decorated.filter(x=>x.duplicateStatus==='중복의심').length;log(s.actor,'users.list','',{page,full,keyword,businessType});return json(res,200,{items,total,duplicateCount,fullProfile:full});}
  if(/^\/api\/admin\/users\/[^/]+\/status$/.test(p)&&m==='PUT'){const s=mustAdmin(req,['owner']);writeGuard(req,s);const id=p.split('/')[4],b=await body(req);check(['active','suspended'].includes(b.status)&&text(b.reason).length>=5,400,'상태와 사유(5자 이상)를 입력해 주세요.');check(one('SELECT id FROM users WHERE id=?',id),404,'사용자가 없습니다.');tx(()=>{run('UPDATE users SET status=? WHERE id=?',b.status,id);run('DELETE FROM sessions WHERE actor=? AND kind=?',id,'user');log(s.actor,'user.status',id,{status:b.status,reason:text(b.reason)});});return json(res,200,{ok:true});}
  if(/^\/api\/admin\/users\/[^/]+\/business-type$/.test(p)&&m==='PUT'){const s=mustAdmin(req,['owner','operator']);writeGuard(req,s);const id=p.split('/')[4],b=await body(req),value=text(b.businessType,30),allowed=['개인회원','프리랜서','개인/프리랜서','개인사업자','법인사업자'];check(allowed.includes(value),400,'사업자 유형을 확인해 주세요.');const row=one('SELECT profile FROM users WHERE id=?',id);check(row,404,'사용자가 없습니다.');const pr=open(row.profile);pr.businessType=value;run('UPDATE users SET profile=?,profile_rev=profile_rev+1 WHERE id=?',seal(pr),id);log(s.actor,'user.businessType',id,{businessType:value});return json(res,200,{ok:true,businessType:value});}
@@ -943,6 +1038,10 @@ const server=http.createServer((req,res)=>{
   console.log(JSON.stringify({event:'http_request',requestId,method:req.method,route:routeGroup,status:res.statusCode,durationMs:Math.round(performance.now()-started)}));
  });
  route(req,res).catch(error=>{
+  if(String(req.url||'').startsWith('/api/guest-sign/')&&Number(error.status)===429){
+   // No customer data, contract IDs, device keys or credentials in this diagnostic.
+   console.warn(JSON.stringify({event:'guest_sign_429',requestId,source:error.websignUpstream===true?'external_websign':'onebiz_local_limit'}));
+  }
   if(!res.headersSent)json(res,error.status||500,{ok:false,error:error.status?error.message:'서버 처리 오류입니다. 데이터는 자동 초기화하지 않았습니다.',requestId});else res.end();
   if(!error.status)console.error(JSON.stringify({event:'server_error',requestId,name:error.name}));
  });

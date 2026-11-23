@@ -1,0 +1,84 @@
+<!doctype html>
+<html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>원비즈 전자계약</title>
+<style nonce="__CSP_NONCE__">
+*{box-sizing:border-box}body{font-family:Arial,"Noto Sans KR",sans-serif;background:#f6f7fb;margin:0;color:#1f2633}
+.wrap{max-width:640px;margin:auto;padding:20px 15px}.head{color:#4e52ac;font-weight:800;font-size:13px}
+h1{font-size:25px;margin:9px 0}h2{font-size:17px;margin:4px 0 12px}
+.card{padding:19px;margin:13px 0;border:1px solid #e2e5ef;background:white;border-radius:15px}
+.row{display:flex;justify-content:space-between;gap:18px;padding:9px 0;border-bottom:1px solid #eee;font-size:14px}
+.pre{white-space:pre-wrap;overflow:auto;max-height:240px;padding:14px;background:#f8f9fc;border-radius:9px;font-size:13px;line-height:1.6}
+.ack{display:flex;gap:10px;margin:14px 0;line-height:1.5;font-size:14px}.ack input{width:20px;height:20px;flex:none}
+.field{width:100%;padding:12px;border:1px solid #b7bfd0;border-radius:9px;margin:6px 0;font-size:16px}
+button,.link{display:block;background:#4e52ac;color:white;text-align:center;padding:15px;border:0;border-radius:10px;width:100%;font-size:16px;font-weight:700;text-decoration:none}
+button:disabled{background:#bec3d1}.outline{background:white;color:#4e52ac;border:1px solid #4e52ac;margin:8px 0 0}
+canvas{width:100%;height:190px;border:1px solid #bac1d0;background:white;border-radius:8px;touch-action:none}
+.note{font-size:13px;color:#565b69;line-height:1.65}.hide{display:none}.success{color:#0b7144;font-weight:700}
+</style></head><body>
+<div class="wrap"><div class="head">ONEBIZ · 원비즈</div><h1>전자계약 확인 및 서명</h1>
+<p class="note">계약서 확인과 전자서명을 위한 페이지입니다. 테스트 단계의 간편 확인은 공인된 본인인증이 아닙니다.</p>
+<div class="card" id="loading">계약서를 불러오는 중입니다.</div>
+<main id="main" class="hide">
+<section class="card"><h2>계약 기본정보</h2><div class="row"><span>계약번호</span><b id="id"></b></div>
+<div class="row"><span>고객명</span><b id="customer"></b></div>
+<div class="row"><span>금액</span><b id="amount"></b></div><div class="row"><span>시공 예정일</span><b id="workDate"></b></div>
+<div class="row"><span>전화번호</span><b id="phone"></b></div><div class="row"><span>품목</span><b id="item"></b></div></section>
+<section class="card"><h2>계약조건</h2><div class="pre" id="terms"></div><h2>특약사항</h2><div class="pre" id="special"></div>
+<label class="ack"><input id="agreeContract" type="checkbox"><span>계약내용 및 특약을 확인했습니다.</span></label>
+<label class="ack"><input id="agreeSign" type="checkbox"><span>전자서명 및 서명된 계약서의 보관에 동의합니다.</span></label></section>
+<section class="card"><h2>고객 확인</h2><p class="note">계약서에 등록된 고객명과 전화번호 끝 4자리를 입력합니다. 별도의 휴대폰 본인인증은 아닙니다.</p>
+<input id="signerName" class="field" placeholder="고객명" autocomplete="name">
+<input id="last4" class="field" inputmode="numeric" maxlength="4" placeholder="전화번호 끝 4자리" autocomplete="off"></section>
+<section class="card"><h2>서명</h2><canvas id="sig" width="600" height="190" aria-label="전자서명 입력"></canvas>
+<button type="button" id="clear" class="outline">서명 지우기</button></section>
+<button id="finish" disabled>동의 및 전자서명 완료</button><p class="note" id="error" role="alert"></p>
+</main>
+<div class="card hide" id="done"><h2 class="success">서명 완료</h2><p>체결된 계약서 원본을 확인하실 수 있습니다.</p>
+<a class="link" id="receipt" rel="noreferrer">완료된 계약서 확인</a></div>
+</div>
+<script nonce="__CSP_NONCE__">
+'use strict';
+const parts=location.pathname.split('/').filter(Boolean),id=parts[1],
+token=new URLSearchParams(location.search).get('token')||'';
+const $=id=>document.getElementById(id);
+const canvas=$('sig'),ctx=canvas.getContext('2d');ctx.strokeStyle='#252530';ctx.lineWidth=2.7;ctx.lineCap='round';
+let down=false,hasSig=false;
+function point(e){const rect=canvas.getBoundingClientRect();return [(e.clientX-rect.left)*canvas.width/rect.width,(e.clientY-rect.top)*canvas.height/rect.height]}
+function ready(){const name=$('signerName').value.trim(),code=$('last4').value;
+ $('finish').disabled=!(hasSig&&name&&/^\d{4}$/.test(code)&&$('agreeContract').checked&&$('agreeSign').checked)}
+canvas.addEventListener('pointerdown',e=>{down=true;canvas.setPointerCapture(e.pointerId);const p=point(e);ctx.beginPath();ctx.moveTo(p[0],p[1]);e.preventDefault()});
+canvas.addEventListener('pointermove',e=>{if(!down)return;const p=point(e);ctx.lineTo(p[0],p[1]);ctx.stroke();hasSig=true;ready();e.preventDefault()});
+for(const ev of ['pointerup','pointercancel'])canvas.addEventListener(ev,()=>{down=false});
+$('clear').addEventListener('click',()=>{ctx.clearRect(0,0,canvas.width,canvas.height);hasSig=false;ready()});
+for(const el of ['signerName','last4','agreeContract','agreeSign'])$(el).addEventListener('input',ready);
+function done(url){$('loading').classList.add('hide');$('main').classList.add('hide');$('done').classList.remove('hide');$('receipt').href=url}
+async function load(){
+ try{
+  const r=await fetch('/api/sign/'+encodeURIComponent(id)+'?token='+encodeURIComponent(token),{cache:'no-store'});
+  if(!r.ok)throw Error('계약서를 불러올 수 없습니다. 서명 링크를 확인해 주세요.');
+  const data=await r.json(),c=data.contract;
+  if(c.signed){done(c.receiptUrl);return}
+  $('id').textContent=c.id;$('customer').textContent=c.customer;
+  $('amount').textContent=Number(c.amount).toLocaleString('ko-KR')+'원';
+  $('workDate').textContent=c.workDate||'미정';$('phone').textContent=c.phoneMasked||'-';
+  $('item').textContent=c.item||'';$('terms').textContent=c.standardTerms||'';
+  $('special').textContent=c.specialTerms||'없음';$('signerName').value=c.customer;
+  $('loading').classList.add('hide');$('main').classList.remove('hide');ready();
+ }catch(e){$('loading').textContent=e.message}
+}
+$('finish').addEventListener('click',async()=>{
+ $('finish').disabled=true;$('error').textContent='';
+ try{
+  const r=await fetch('/api/sign/'+encodeURIComponent(id)+'/complete?token='+encodeURIComponent(token),{
+   method:'POST',headers:{'Content-Type':'application/json'},
+   body:JSON.stringify({signerName:$('signerName').value.trim(),phoneLast4:$('last4').value,
+    agreeContract:$('agreeContract').checked,agreeSign:$('agreeSign').checked,
+    signatureDataUrl:canvas.toDataURL('image/png')})
+  });
+  const data=await r.json().catch(()=>({}));
+  if(!r.ok)throw Error(data.error||'서명 처리 오류');
+  done(data.receiptUrl);
+ }catch(e){$('error').textContent=e.message;ready()}
+});
+load();
+</script></body></html>
