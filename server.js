@@ -998,6 +998,10 @@ const server=http.createServer((req,res)=>{
   console.log(JSON.stringify({event:'http_request',requestId,method:req.method,route:routeGroup,status:res.statusCode,durationMs:Math.round(performance.now()-started)}));
  });
  route(req,res).catch(error=>{
+  if(String(req.url||'').startsWith('/api/guest-sign/')&&Number(error.status)===429){
+   // No customer data, contract IDs, device keys or credentials in this diagnostic.
+   console.warn(JSON.stringify({event:'guest_sign_429',requestId,source:error.websignUpstream===true?'external_websign':'onebiz_local_limit'}));
+  }
   if(!res.headersSent)json(res,error.status||500,{ok:false,error:error.status?error.message:'서버 처리 오류입니다. 데이터는 자동 초기화하지 않았습니다.',requestId});else res.end();
   if(!error.status)console.error(JSON.stringify({event:'server_error',requestId,name:error.name}));
  });
