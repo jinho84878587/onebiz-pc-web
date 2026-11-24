@@ -2,6 +2,13 @@
 const {test}=require('node:test');
 const assert=require('node:assert/strict');
 const render=require('../lib/guest-signed-contract');
+const fs=require('node:fs'),path=require('node:path');
+const printCss=fs.readFileSync(path.join(__dirname,'..','public','contract-receipt.css'),'utf8');
+test('A4 print stylesheet keeps 2-page layout and does not clip terms',()=>{
+ assert.match(printCss,/@page\s*\{size:A4 portrait/);
+ assert.match(printCss,/white-space:pre-wrap/);
+ assert.match(printCss,/break-after:page/);
+});
 test('completed contract A4 print keeps supplier, payments, immutable terms, and signer image',()=>{
  const terms='제1조 목적\n제2조 [분쟁] 기존 문구 그대로 <법률 원문>\n제11조 소유권 유보';
  const special='특약 1: 고객 동의\n특약 2: 금액 변경 금지';
