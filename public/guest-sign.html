@@ -22,7 +22,13 @@ canvas{width:100%;height:190px;border:1px solid #bac1d0;background:white;border-
 <section class="card"><h2>계약 기본정보</h2><div class="row"><span>계약번호</span><b id="id"></b></div>
 <div class="row"><span>고객명</span><b id="customer"></b></div>
 <div class="row"><span>금액</span><b id="amount"></b></div><div class="row"><span>시공 예정일</span><b id="workDate"></b></div>
-<div class="row"><span>전화번호</span><b id="phone"></b></div><div class="row"><span>품목</span><b id="item"></b></div></section>
+<div class="row"><span>전화번호</span><b id="phone"></b></div><div class="row"><span>품목</span><b id="item"></b></div>
+<div class="row"><span>공급업체</span><b id="supplier"></b></div>
+<div class="row"><span>사업자번호</span><b id="regNo"></b></div>
+<div class="row"><span>현장주소</span><b id="siteAddress"></b></div>
+<div class="row"><span>계약금·지급일</span><b id="deposit"></b></div>
+<div class="row"><span>중도금·지급일</span><b id="middle"></b></div>
+<div class="row"><span>잔금·지급일</span><b id="balance"></b></div></section>
 <section class="card"><h2>계약조건</h2><div class="pre" id="terms"></div><h2>특약사항</h2><div class="pre" id="special"></div>
 <label class="ack"><input id="agreeContract" type="checkbox"><span>계약내용 및 특약을 확인했습니다.</span></label>
 <label class="ack"><input id="agreeSign" type="checkbox"><span>전자서명 및 서명된 계약서의 보관에 동의합니다.</span></label></section>
@@ -62,6 +68,13 @@ async function load(){
   $('amount').textContent=Number(c.amount).toLocaleString('ko-KR')+'원';
   $('workDate').textContent=c.workDate||'미정';$('phone').textContent=c.phoneMasked||'-';
   $('item').textContent=c.item||'';$('terms').textContent=c.standardTerms||'';
+  $('supplier').textContent=c.supplier?.businessName||'미등록';
+  $('regNo').textContent=c.supplier?.registrationNo||'-';
+  $('siteAddress').textContent=c.siteAddress||'-';
+  const payment=(amount,due)=>Number(amount||0).toLocaleString('ko-KR')+'원 / '+(due||'미정');
+  $('deposit').textContent=payment(c.depositAmount,c.depositDueDate);
+  $('middle').textContent=payment(c.middleAmount,c.middleDueDate);
+  $('balance').textContent=payment(c.balanceAmount,c.balanceDueDate);
   $('special').textContent=c.specialTerms||'없음';$('signerName').value=c.customer;
   $('loading').classList.add('hide');$('main').classList.remove('hide');ready();
  }catch(e){$('loading').textContent=e.message}
