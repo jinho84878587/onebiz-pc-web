@@ -1,0 +1,25 @@
+/* ONEBIZ signed contract print layout. Browser Print / Save as PDF: A4 portrait. */
+:root{color-scheme:light}*{box-sizing:border-box}
+body{margin:0;background:#eef0f5;font-family:"Malgun Gothic","Apple SD Gothic Neo","Noto Sans KR",sans-serif;color:#182032;font-size:12px;line-height:1.5}
+.toolbar{max-width:210mm;margin:16px auto;padding:12px 17px;background:white;border:1px solid #dfe2eb;border-radius:9px;display:flex;justify-content:space-between;align-items:center;gap:10px}
+.toolbar b{color:#3e438c;font-size:14px}.toolbar span{color:#5b6272}
+.sheet{width:210mm;min-height:297mm;margin:16px auto;background:white;padding:13mm 15mm 12mm;box-shadow:0 5px 25px #18203624;position:relative}
+.brand{font-size:11px;font-weight:800;letter-spacing:1px;color:#5b43d6}.head{display:flex;justify-content:space-between;align-items:flex-start;gap:18px;border-bottom:2px solid #5b43d6;padding-bottom:11px}
+h1{font-size:23px;margin:3px 0 0}h2{font-size:14px;margin:15px 0 7px;color:#393181}
+.ref{font-size:10px;color:#606b7d;text-align:right}
+table{width:100%;border-collapse:collapse;table-layout:fixed}th,td{border:1px solid #d7dbe5;padding:7px 9px;vertical-align:top;overflow-wrap:anywhere}
+th{background:#f7f7fb;color:#33374b;font-weight:700;text-align:left;width:20%}
+.details th{width:18%}.details td{width:32%}
+.amount{color:#4537bb;font-size:17px;font-weight:800}.payments th{width:auto;background:#f7f7fb}
+.payments th,.payments td{text-align:center}
+.terms{white-space:pre-wrap;overflow-wrap:anywhere;border:1px solid #d7dbe5;padding:11px 13px;line-height:1.52;font-size:10.5px;margin:0;min-height:50px}
+.signatures{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:15px}
+.signature-box{border:1px solid #d7dbe5;padding:11px;min-height:122px}
+.signature-title{font-weight:700;font-size:12px;margin-bottom:8px}
+.signature-image{display:block;max-width:100%;max-height:62px;object-fit:contain;object-position:left center}
+.signature-note{font-size:9.5px;color:#576070;white-space:pre-wrap;overflow-wrap:anywhere}
+.footer{position:absolute;bottom:9mm;left:15mm;right:15mm;border-top:1px solid #e2e4eb;padding-top:5px;color:#707786;font-size:9px;display:flex;justify-content:space-between}
+.note{font-size:10px;color:#626b7d;line-height:1.5}
+@media screen and (max-width:840px){.sheet{width:100%;min-height:0;margin:0 0 8px;padding:16px;box-shadow:none}.footer{position:static;margin-top:25px}.toolbar{margin:0;padding:10px;border:0;border-radius:0;display:block}.details th{width:23%}.details td{width:27%}.signature-box{min-width:0}}
+@page{size:A4 portrait;margin:0}
+@media print{body{background:white;color:#111}.toolbar{display:none!important}.sheet{width:210mm;min-height:297mm;box-shadow:none;margin:0;padding:13mm 15mm 12mm;break-after:page;page-break-after:always}.sheet:last-of-type{break-after:auto;page-break-after:auto}.footer{position:absolute;bottom:9mm}.terms{font-size:10px}.signatures{break-inside:avoid}h2{break-after:avoid}table{break-inside:avoid}}
