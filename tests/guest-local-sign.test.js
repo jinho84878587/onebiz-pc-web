@@ -30,7 +30,7 @@ test('first-party guest signing: create, isolated access, privacy, consent, sign
  const key1=crypto.randomBytes(32).toString('base64url'),key2=crypto.randomBytes(32).toString('base64url');
  const contract={id:'C-2026-91002',customer:'테스트 전자계약',phone:'01023456789',amount:320000,
   contractDate:'2026-11-23',workDate:'2026-11-30',item:'테스트 장비',standardTerms:'시험용 계약조건',
-  specialTerms:'시험용 특약',signed:false};
+  specialTerms:'시험용 특약',supplier:{businessName:'하이원시스템',representative:'시험공급자',registrationNo:'1234567890',phone:'01098765432',address:'경기도 수원시 테스트로',addressDetail:'101호'},signed:false};
  async function guest(route,secret,data=contract,confirm=true){
   const response=await fetch(origin+route,{method:'POST',
    headers:{'Content-Type':'application/json','X-Onebiz-Client':'android','X-Onebiz-Guest-Sign-Key':secret},
@@ -86,6 +86,15 @@ test('first-party guest signing: create, isolated access, privacy, consent, sign
  assert.equal(receipt.status,200);
  const receiptHtml=await receipt.text();
  assert.ok(receiptHtml.includes('시험용 특약'));
+ assert.ok(receiptHtml.includes('시험용 계약조건'));
+ assert.ok(receiptHtml.includes('하이원시스템'));
+ assert.ok(receiptHtml.includes('1234567890'));
+ assert.ok(receiptHtml.includes('계약금'));
+ assert.ok(receiptHtml.includes('중도금'));
+ assert.ok(receiptHtml.includes('잔금'));
+ assert.ok(receiptHtml.includes('고객(갑) 전자서명'));
+ assert.ok(receiptHtml.includes('contract-receipt.css'));
+ assert.equal((receiptHtml.match(/class="sheet"/g)||[]).length,2,'two printable A4 pages');
  assert.ok(receiptHtml.includes('data:image/png;base64'));
  const after=await fetch(origin+publicRoute);
  assert.equal((await after.json()).contract.signed,true);
