@@ -486,6 +486,11 @@ async function route(req,res){
    middleAmount:Number(raw.middleAmount)||0,middleDueDate:text(raw.middleDueDate,20),
    balanceAmount:Number(raw.balanceAmount)||0,balanceDueDate:text(raw.balanceDueDate,20),
    standardTerms:text(raw.standardTerms,10000),specialTerms:text(raw.specialTerms,5000),
+   supplier:raw.supplier&&typeof raw.supplier==='object'&&!Array.isArray(raw.supplier)?{
+    businessName:text(raw.supplier.businessName,120),representative:text(raw.supplier.representative,80),
+    registrationNo:text(raw.supplier.registrationNo,40),phone:text(raw.supplier.phone,40),
+    address:text(raw.supplier.address,300),addressDetail:text(raw.supplier.addressDetail,200)
+   }:{},
    contractType:text(raw.contractType,100),signed:false
   };
   if(env.ONEBIZ_GUEST_SIGN_SELFHOSTED==='true'){
