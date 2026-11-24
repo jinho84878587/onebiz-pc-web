@@ -6991,7 +6991,16 @@ private fun onebizGuestSignRequested(context: Context, contractId: String): Bool
         .getBoolean("requested:" + scope + ":" + contractId, false)
 }
 
-private fun onebizGuestSignContract(contract: Contract): JSONObject = JSONObject().apply {
+private fun onebizGuestSignContract(context: Context, contract: Contract): JSONObject = JSONObject().apply {
+    val supplier = loadBusinessProfile(context)
+    put("supplier", JSONObject().apply {
+        put("businessName", supplier.businessName)
+        put("representative", supplier.representative)
+        put("registrationNo", supplier.registrationNo)
+        put("phone", supplier.phone)
+        put("address", supplier.address)
+        put("addressDetail", supplier.addressDetail)
+    })
     put("id", contract.id); put("quoteId", contract.quoteId); put("customer", contract.customer)
     put("phone", contract.phone); put("address", contract.address)
     put("siteAddress", contract.siteAddress); put("siteAddressDetail", contract.siteAddressDetail)
@@ -7019,7 +7028,7 @@ private fun onebizGuestSignRequest(
             doOutput = true
         }
         try {
-            val payload = JSONObject().put("contract", onebizGuestSignContract(contract)).put("confirm", confirm)
+            val payload = JSONObject().put("contract", onebizGuestSignContract(context, contract)).put("confirm", confirm)
             conn.outputStream.use { it.write(payload.toString().toByteArray(Charsets.UTF_8)) }
             val code = conn.responseCode
             val result = (if (code in 200..299) conn.inputStream else conn.errorStream)
