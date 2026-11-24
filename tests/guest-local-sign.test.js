@@ -87,7 +87,12 @@ test('first-party guest signing: create, isolated access, privacy, consent, sign
  const receiptHtml=await receipt.text();
  assert.ok(receiptHtml.includes('시험용 특약'));
  assert.ok(receiptHtml.includes('시험용 계약조건'));
- assert.ok(receiptHtml.includes('하이원시스템'));
+ assert.ok(receiptHtml.includes('<h1>하이원시스템</h1>'),'existing app PDF starts with supplier name');
+ assert.ok(receiptHtml.includes('공급자 정보'));
+ assert.ok(receiptHtml.includes('계약 상대방'));
+ assert.ok(receiptHtml.includes('계약내용'));
+ assert.ok(receiptHtml.includes('지급조건'));
+ assert.ok(receiptHtml.includes('현장 특약사항'));
  assert.ok(receiptHtml.includes('1234567890'));
  assert.ok(receiptHtml.includes('계약금'));
  assert.ok(receiptHtml.includes('중도금'));
