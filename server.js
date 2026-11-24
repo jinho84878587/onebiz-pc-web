@@ -398,6 +398,17 @@ async function route(req,res){
  res.setHeader('Content-Security-Policy',"default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'");
  if(!local)res.setHeader('Strict-Transport-Security','max-age=31536000');
  if(env.ONEBIZ_GUEST_SIGN_ENABLED==='true'&&env.ONEBIZ_GUEST_SIGN_SELFHOSTED==='true'&&await guestLocalSign.publicRoute(req,res,u,store,origin,body,limit))return;
+ // Opaque self-hosted signing URL for Kakao templates (max URL length 100).
+ // Never put original signing tokens or customer data in server logs.
+ if(/^\/gs\/[A-Za-z0-9_-]{43}$/.test(p)&&(m==='GET'||m==='HEAD')){
+  limit(req,'guest-alim-shortlink:'+ip(req),100,600000);
+  const token=p.slice(4),record=one('SELECT provider_id,token_hash,sign_url,expires,signed_info FROM guest_local_sign_links WHERE token_hash=?',hash(token));
+  check(record&&(record.expires>Date.now()||!!record.signed_info),404,'서명 링크를 확인해 주세요.');
+  const link=new URL(open(record.sign_url));
+  check(link.origin===origin&&link.pathname==='/sign/'+record.provider_id&&link.searchParams.get('token')===token,410,'서명 링크가 변경됐습니다.');
+  res.writeHead(302,{'Location':link.toString(),'Cache-Control':'no-store','X-Robots-Tag':'noindex, nofollow'});
+  return res.end();
+ }
  if(p==='/health')return json(res,200,{ok:true,version:'2.0.0-dev.1',mode,documentCenter:true,documentCenterVersion:1});
  if(/^\/(contract|s)\/[A-Za-z0-9_-]{43}$/.test(p)&&(m==='GET'||m==='HEAD')){
   limit(req,'public-document-landing:'+ip(req),120,600000);
@@ -499,6 +510,70 @@ async function route(req,res){
   if(isCreate)check(input.confirm===true,400,'계약서 온라인 전송에 동의해 주세요.');
   const response=isCreate?guestLocalSign.create(store,origin,guestId,contract):guestLocalSign.status(store,guestId,contract);
   return json(res,200,response);
+ }
+ // Guest contract-sign Alimtalk: opt-in test recipients only.
+ // An unverified anonymous install must never become an unrestricted paid SMS/Kakao sender.
+ if((p==='/api/guest-alimtalk/contract/preview'||p==='/api/guest-alimtalk/contract/send')&&m==='POST'){
+  check(env.ONEBIZ_GUEST_SIGN_ENABLED==='true'&&env.ONEBIZ_GUEST_SIGN_SELFHOSTED==='true',503,'원비즈 전자서명이 비활성화되어 있습니다.');
+  check(req.headers['x-onebiz-client']==='android',403,'원비즈 앱에서 요청해 주세요.');
+  writeGuard(req);
+  const secret=String(req.headers['x-onebiz-guest-sign-key']||'');
+  check(/^[A-Za-z0-9_-]{43}$/.test(secret),401,'기기 전자서명 인증정보가 없습니다.');
+  const guestId=hash('onebiz-guest-sign-v1:'+secret),sending=p.endsWith('/send');
+  limit(req,'guest-alimtalk-preview-ip:'+ip(req),sending?12:80,3600000);
+  limit(req,'guest-alimtalk-preview-device:'+guestId,sending?12:80,3600000);
+  const input=await body(req),contractId=text(input.contractId,80);
+  check(/^C-[0-9]{4}-[0-9]{3,}$/.test(contractId),400,'계약번호를 확인해 주세요.');
+  const row=one('SELECT * FROM guest_local_sign_links WHERE guest_hash=? AND contract_id=?',guestId,contractId);
+  check(row,404,'먼저 카카오톡 전자서명 링크를 생성해 주세요.');
+  check(!row.signed_info,409,'이미 서명 완료된 계약서입니다.');
+  check(row.expires>Date.now(),410,'서명 링크가 만료됐습니다. 새 계약서를 작성해 주세요.');
+  const contract=open(row.contract_body),to=phone(contract.phone),company=text(contract.supplier?.businessName||contract.supplier?.representative,120);
+  check(company,400,'내 정보에서 업체명 또는 대표자를 등록해 주세요.');
+  check(text(contract.customer,80),400,'고객명을 확인해 주세요.');
+  const url=new URL(open(row.sign_url)),token=url.searchParams.get('token')||'';
+  check(url.origin===origin&&url.pathname==='/sign/'+row.provider_id&&/^[A-Za-z0-9_-]{43}$/.test(token)&&hash(token)===row.token_hash,409,'기존 전자서명 링크가 일치하지 않습니다.');
+  const shortUrl=origin+'/gs/'+token;
+  check(Buffer.byteLength(shortUrl,'utf8')<=100,500,'서명 링크 길이 설정을 확인해 주세요.');
+  const allowed=new Set(String(env.ONEBIZ_GUEST_ALIMTALK_ALLOWED_TO||'').split(/[,;\s]+/).map(x=>x.replace(/[^0-9]/g,'')).filter(x=>/^010\d{8}$/.test(x)));
+  const flag=env.ONEBIZ_GUEST_ALIMTALK_ENABLED==='true'&&env.SOLAPI_GUEST_SEND_ENABLED==='true'&&env.SOLAPI_SEND_ENABLED==='true';
+  const permitted=allowed.has(to);
+  const enabled=flag&&permitted;
+  const reason=!flag?'비로그인 알림톡은 시험 발송 승인 전입니다. 일반 카카오톡 공유를 사용해 주세요.':
+   !permitted?'등록된 시험 수신번호만 알림톡 발송이 가능합니다. 일반 카카오톡 공유를 사용해 주세요.':'';
+  if(!sending&&!enabled)return json(res,200,{ok:true,dryRun:true,sendEnabled:false,maskedTo:phoneMask(to),contractId,reason});
+  check(enabled,503,reason);
+  const variables={'고객명':text(contract.customer,80),'업체명':company,
+   '계약금액':Math.round(Number(contract.amount)||0).toLocaleString('ko-KR'),'서명링크':shortUrl};
+  const data=alimtalkPreview({kind:'contractSign',to,variables});
+  const templates=await templateInspector.sendable(alimtalkAuth);
+  const template=templates.find(t=>t.templateId===data.templateId);
+  check(template,503,'SOLAPI 승인된 서명 요청 템플릿을 확인할 수 없습니다.');
+  const matching=templateInspector.inspect([{kind:'contractSign',name:'계약서 서명 요청',envKey:'SOLAPI_TEMPLATE_CONTRACT_SIGN',fields:alimtalkKinds.contractSign.fields}],[template],env)[0];
+  check(matching.variableMatch==='match',503,'서명 요청 알림톡 변수 구성이 승인된 템플릿과 일치하지 않습니다.');
+  if(!sending)return json(res,200,{ok:true,dryRun:true,sendEnabled:true,maskedTo:phoneMask(to),contractId,templateReady:true});
+  check(input.confirm===true,400,'요금이 발생할 수 있는 알림톡 발송에 동의해 주세요.');
+  limit(req,'guest-alimtalk-global',Math.min(10,Math.max(1,Number(env.ONEBIZ_GUEST_ALIMTALK_DAILY_LIMIT)||5)),86400000);
+  limit(req,'guest-alimtalk-device-day:'+guestId,2,86400000);
+  limit(req,'guest-alimtalk-recipient-day:'+hash(to),2,86400000);
+  const actor='guest:'+guestId,ref='contract:'+contractId;
+  const previous=one("SELECT created FROM alimtalk_logs WHERE actor=? AND kind='guestContractSign' AND target_ref=? AND status IN ('accepted','unknown') ORDER BY created DESC LIMIT 1",actor,ref);
+  check(!previous||Date.now()-previous.created>=86400000,429,'동일 계약의 알림톡은 하루 뒤 다시 발송할 수 있습니다.');
+  const reservation=paymentDocuments.reserve(store,actor,'guestContractSign',ref);
+  let started=false;
+  try{
+   let result;
+   started=true;
+   try{result=await sendAlimtalk(data);}
+   catch(e){result={ok:false,status:e.status||0,result:{error:e.status?e.message:'SOLAPI 접수 결과를 확인하지 못했습니다.'}};}
+   const outcome=paymentDocuments.outcome(result);
+   const id=alimtalkResultLog(actor,'guestContractSign',ref,{...data,phoneMask:phoneMask(to)},result,outcome);
+   paymentDocuments.finish(store,reservation,outcome);
+   const failure=templateInspector.failureSummary(result);
+   return json(res,result.ok?200:502,{ok:result.ok,accepted:result.ok,status:outcome,requestId:id,
+    ...(result.ok?{notice:'알림톡 발송 요청 접수. 실제 도착 여부는 SOLAPI 발송내역에서 확인해 주세요.'}:
+    {error:outcome==='unknown'?'발송 결과를 확인하지 못했습니다. 다시 발송하지 말고 SOLAPI 내역을 확인해 주세요.':'알림톡 발송 접수 실패'+(failure.providerCode?' ('+failure.providerCode+')':'')+' · '+failure.providerError})});
+  }catch(e){paymentDocuments.finish(store,reservation,started?'unknown':'failed');throw e;}
  }
  if(p==='/api/auth/phone/request'&&m==='POST'){
   writeGuard(req);limit(req,'sms-ip:'+ip(req),20,3600000);const b=await body(req),number=phone(b.phone),c=consent(b);
