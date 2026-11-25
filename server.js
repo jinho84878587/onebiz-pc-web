@@ -536,7 +536,7 @@ async function route(req,res){
   const shortUrl=origin+'/gs/'+token;
   check(Buffer.byteLength(shortUrl,'utf8')<=100,500,'서명 링크 길이 설정을 확인해 주세요.');
   const allowed=new Set(String(env.ONEBIZ_GUEST_ALIMTALK_ALLOWED_TO||'').split(/[,;\s]+/).map(x=>x.replace(/[^0-9]/g,'')).filter(x=>/^010\d{8}$/.test(x)));
-  const flag=env.ONEBIZ_GUEST_ALIMTALK_ENABLED==='true'&&env.SOLAPI_GUEST_SEND_ENABLED==='true'&&env.SOLAPI_SEND_ENABLED==='true';
+  const flag=env.ONEBIZ_GUEST_ALIMTALK_ENABLED==='true'&&env.SOLAPI_GUEST_SEND_ENABLED==='true';
   const permitted=allowed.has(to);
   const enabled=flag&&permitted;
   const reason=!flag?'비로그인 알림톡은 시험 발송 승인 전입니다. 일반 카카오톡 공유를 사용해 주세요.':
