@@ -511,8 +511,10 @@ async function route(req,res){
   check(/^[A-Za-z0-9_-]{43}$/.test(secret),401,'기기 전자서명 인증정보를 확인해 주세요.');
   const guestId=hash('onebiz-guest-sign-v1:'+secret);
   const isCreate=p==='/api/guest-sign/link';
-  limit(req,'guest-sign-ip:'+ip(req),isCreate?10:5000,3600000);
-  limit(req,'guest-sign-device:'+guestId,isCreate?8:5000,3600000);
+  // Background status polling must NOT consume the separate new-link quota.
+  const quotaType=isCreate?'link':'status';
+  limit(req,'guest-sign-ip:'+quotaType+':'+ip(req),isCreate?10:5000,3600000);
+  limit(req,'guest-sign-device:'+quotaType+':'+guestId,isCreate?8:5000,3600000);
   if(isCreate)limit(req,'guest-sign-global',Number(env.GUEST_SIGN_DAILY_LIMIT||500),86400000);
   const input=await body(req),raw=input.contract;
   check(raw&&typeof raw==='object'&&!Array.isArray(raw),400,'계약서 내용을 확인해 주세요.');
