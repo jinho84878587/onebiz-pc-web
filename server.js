@@ -409,6 +409,37 @@ async function route(req,res){
   res.writeHead(302,{'Location':link.toString(),'Cache-Control':'no-store','X-Robots-Tag':'noindex, nofollow'});
   return res.end();
  }
+ // Temporary test-app gateway: ONLY the one operator-approved test recipient, NO API credentials.
+ // The production backend performs all final recipient, template, cost and rate-limit checks.
+ if(env.ONEBIZ_TEST_GUEST_SIGN_PROXY==='true' &&
+  ['/api/guest-sign/link','/api/guest-sign/status',
+   '/api/guest-alimtalk/contract/preview','/api/guest-alimtalk/contract/send'].includes(p) && m==='POST'){
+  check(req.headers['x-onebiz-client']==='android',403,'시험용 원비즈 앱에서만 요청할 수 있습니다.');
+  writeGuard(req);
+  const secret=String(req.headers['x-onebiz-guest-sign-key']||'');
+  check(/^[A-Za-z0-9_-]{43}$/.test(secret),401,'전자서명 기기 인증정보가 필요합니다.');
+  limit(req,'test-guest-alim-proxy-ip:'+ip(req),20,3600000);
+  limit(req,'test-guest-alim-proxy-device:'+hash(secret),20,3600000);
+  const input=await body(req);
+  const allowed=String(env.ONEBIZ_TEST_GUEST_ALLOWED_TO||'').replace(/\D/g,'');
+  check(/^010\d{8}$/.test(allowed),503,'시험 수신번호가 설정되지 않았습니다.');
+  if(p==='/api/guest-sign/link'||p==='/api/guest-sign/status'){
+   const requested=String(input?.contract?.phone||'').replace(/\D/g,'');
+   check(requested===allowed,403,'지정된 시험 휴대폰 번호를 계약서에 입력해 주세요.');
+  }else{
+   check(/^C-\d{4}-\d{3,}$/.test(String(input.contractId||'')),400,'시험 계약번호를 확인해 주세요.');
+  }
+  const ctrl=new AbortController(),timer=setTimeout(()=>ctrl.abort(),18000);
+  try{
+   const response=await fetch('https://onebiz-pc-web.onrender.com'+p,{
+    method:'POST',redirect:'error',signal:ctrl.signal,
+    headers:{'Content-Type':'application/json; charset=UTF-8','X-Onebiz-Client':'android','X-Onebiz-Guest-Sign-Key':secret},
+    body:JSON.stringify(input)
+   });
+   const payload=await response.json().catch(()=>({ok:false,error:'시험 서버의 응답을 확인할 수 없습니다.'}));
+   return json(res,response.status,payload);
+  }finally{clearTimeout(timer);}
+ }
  if(p==='/health')return json(res,200,{ok:true,version:'2.0.0-dev.1',mode,documentCenter:true,documentCenterVersion:1});
  if(/^\/(contract|s)\/[A-Za-z0-9_-]{43}$/.test(p)&&(m==='GET'||m==='HEAD')){
   limit(req,'public-document-landing:'+ip(req),120,600000);
